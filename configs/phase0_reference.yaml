@@ -1,0 +1,41 @@
+schema_version: 1
+kind: phase0_reference
+
+run:
+  id: phase0_reference_v1
+  output_root: results
+  seed: 20260712
+
+reference_model:
+  repo_id: astronolan/aion-search
+  revision: e6d56ee28b6768f4e3e4494b2c0b32a00abb2594
+  config_file: config.json
+  weights_file: model.safetensors
+  orig_repo: orig_repo
+
+reference_gate:
+  metric: ndcg@10
+  published_rounded_targets:
+    spiral: 0.941
+    merger: 0.554
+    lens: 0.173
+  lens_top10_positives: 2
+
+training_data:
+  repo_id: astronolan/galaxy-descriptions
+  revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
+  split: train
+
+queries:
+  file: data/queries/retrieval_queries_v1.yaml
+  openai_model: text-embedding-3-large
+  openai_cache: data/cache/query_embeddings/r_oai_queries_v1.parquet
+  qwen_instruction: Given an astronomical search query, retrieve galaxy descriptions whose observable properties match the query.
+
+benchmarks:
+  - name: gz_decals
+    repo_id: astronolan/gz-decals-embeddings
+    revision: c11f7a02aa1ed00b85f3dd43c222271046445a2e
+  - name: lens
+    repo_id: astronolan/lens-retrieval-ls-embeddings
+    revision: f5507c433552084e2b3d195a27dae5110037d64d

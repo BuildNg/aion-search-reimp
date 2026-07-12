@@ -1,0 +1,21 @@
+version: 1
+status: review_required_before_first_result
+queries:
+  spiral:
+    - visible spiral arms
+    - a galaxy with clearly visible spiral arms
+    - discernible curved spiral structure in a galactic disk
+    - a disk galaxy showing a spiral pattern
+    - a galaxy whose disk contains visible winding arms
+  merger:
+    - merging
+    - a galaxy system undergoing a merger
+    - interacting galaxies with visible tidal disturbance
+    - two galaxies in the process of merging
+    - a disturbed galaxy system showing merger features
+  lens:
+    - gravitational lens
+    - a strong gravitational lens with visible arcs
+    - galaxy-scale lensing that produces curved background images
+    - a foreground galaxy lensing a background source
+    - a strong-lens candidate showing an arc or ring
