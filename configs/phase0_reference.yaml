@@ -2,7 +2,7 @@ schema_version: 1
 kind: phase0_reference
 
 run:
-  id: phase0_reference_v1
+  id: phase0_reference_v2
   output_root: results
   seed: 20260712
 
@@ -24,7 +24,7 @@ reference_gate:
 training_data:
   repo_id: astronolan/galaxy-descriptions
   revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
-  split: train
+  split: default
 
 queries:
   file: data/queries/retrieval_queries_v1.yaml

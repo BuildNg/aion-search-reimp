@@ -8,14 +8,16 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from datasets import load_dataset
-
 from aion_reimp.cache import write_embedding_cache
 from aion_reimp.artifacts import initialize_run, tracked_run
 from aion_reimp.caption_audit import write_audit
 from aion_reimp.captioning import QwenCaptioner, append_caption_results
 from aion_reimp.config import load_config
-from aion_reimp.datasets import load_query_rows, materialize_caption_screen
+from aion_reimp.datasets import (
+    load_pinned_dataset,
+    load_query_rows,
+    materialize_caption_screen,
+)
 from aion_reimp.text_embeddings import EmbeddingSpec, QwenEmbedder, embedding_frame
 
 
@@ -84,10 +86,10 @@ def main() -> None:
         write_embedding_cache(query_frame, output_root / "qwen_query_embeddings.parquet")
 
         released_spec = config["released_text"]
-        released = load_dataset(
+        released = load_pinned_dataset(
             released_spec["repo_id"],
-            revision=released_spec["revision"],
-            split=released_spec["split"],
+            released_spec["revision"],
+            released_spec["split"],
         )
         required = {released_spec["object_id_column"], released_spec["text_column"]}
         if required - set(released.column_names):

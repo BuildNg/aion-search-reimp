@@ -47,3 +47,11 @@ def test_caption_rejects_extra_keys() -> None:
     response = json.dumps({"summary": "A galaxy.", "answers": _answers(), "explanation": "extra"})
     with pytest.raises(ValueError, match="only summary and answers"):
         parse_caption_response("g1", response)
+
+
+def test_merging_rejects_not_applicable() -> None:
+    answers = _answers()
+    answers["merging"] = "not-applicable"
+    response = json.dumps({"summary": "A galaxy is visible.", "answers": answers})
+    with pytest.raises(ValueError, match="Invalid merging answer"):
+        parse_caption_response("g1", response)

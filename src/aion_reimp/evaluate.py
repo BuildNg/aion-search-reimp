@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 
 from .model import AIONSearchModel
+from .datasets import load_pinned_dataset
 from .retrieval import rank_candidates, score_ranked_rows
 
 
@@ -43,9 +44,7 @@ def evaluate_one_query(
 
 
 def load_hf_frame(repo_id: str, revision: str, columns: Sequence[str]) -> pd.DataFrame:
-    from datasets import load_dataset
-
-    dataset = load_dataset(repo_id, revision=revision, split="train")
+    dataset = load_pinned_dataset(repo_id, revision, "train")
     missing = set(columns) - set(dataset.column_names)
     if missing:
         raise ValueError(f"{repo_id} missing evaluation columns: {sorted(missing)}")

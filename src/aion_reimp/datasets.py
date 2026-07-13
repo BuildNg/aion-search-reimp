@@ -12,6 +12,20 @@ import yaml
 from PIL import Image
 
 
+def load_pinned_dataset(repo_id: str, revision: str, split: str):
+    """Load a pinned Hub dataset snapshot without requiring network access."""
+    from datasets import load_dataset
+    from huggingface_hub import snapshot_download
+
+    snapshot = snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        revision=revision,
+        local_files_only=True,
+    )
+    return load_dataset(str(snapshot), split=split)
+
+
 def load_query_rows(path: Path) -> List[Dict[str, str]]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     rows: List[Dict[str, str]] = []
@@ -48,14 +62,12 @@ def materialize_caption_screen(
     output_dir: Path,
 ) -> pd.DataFrame:
     """Cluster-only: downloads the frozen 64-row dataset and writes PNGs/labels."""
-    from datasets import load_dataset
-
     output_dir = Path(output_dir)
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Caption screen output is not empty: {output_dir}")
     image_dir = output_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
-    dataset = load_dataset(repo_id, revision=revision, split=split)
+    dataset = load_pinned_dataset(repo_id, revision, split)
     if len(dataset) != 64:
         raise ValueError(f"Expected 64 caption-screen rows, found {len(dataset)}")
     records = []
@@ -91,16 +103,12 @@ def materialize_benchmark_coordinates(
     output_dir: Path,
 ) -> Dict[str, Path]:
     """Cluster-only: freeze benchmark coordinate tables used for exclusion."""
-    from datasets import load_dataset
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs: Dict[str, Path] = {}
     for benchmark in benchmarks:
-        dataset = load_dataset(
-            benchmark["repo_id"],
-            revision=benchmark["revision"],
-            split="train",
+        dataset = load_pinned_dataset(
+            benchmark["repo_id"], benchmark["revision"], "train"
         )
         missing = {"ra", "dec"} - set(dataset.column_names)
         if missing:

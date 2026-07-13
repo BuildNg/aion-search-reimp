@@ -2,7 +2,7 @@ schema_version: 1
 kind: phase1_open_text
 
 run:
-  id: phase1_open_text_v1
+  id: phase1_open_text_v2
   output_root: results
   seed: 20260712
 
@@ -15,7 +15,7 @@ queries:
 captioning:
   model_id: Qwen/Qwen3-VL-8B-Instruct
   revision: 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b
-  prompt_file: data/prompts/qwen_caption_v1.txt
+  prompt_file: data/prompts/qwen_caption_v2.txt
   dtype: bfloat16
   max_new_tokens: 512
   do_sample: false
@@ -33,7 +33,7 @@ text_embedding:
 released_text:
   repo_id: astronolan/galaxy-descriptions
   revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
-  split: train
+  split: default
   object_id_column: object_id
   text_column: summary
   batch_size: 128
