@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("results/phase1_extractor_diag_v3"),
+        default=Path("results/phase1_extractor_diag_v4"),
     )
     args = parser.parse_args()
     config = load_config(Path("configs/phase1.yaml"))
