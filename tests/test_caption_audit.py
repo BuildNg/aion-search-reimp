@@ -17,8 +17,20 @@ from aion_reimp.morphology import (
     SCHEMA_JSON,
     build_decision_tree_path,
     calibration_metrics,
+    model_vocab_size,
     parse_morphology_response,
 )
+
+
+def test_nested_gemma_config_vocab_size() -> None:
+    class Value:
+        pass
+
+    model = Value()
+    model.config = Value()
+    model.config.text_config = Value()
+    model.config.text_config.vocab_size = 262_208
+    assert model_vocab_size(model, []) == 262_208
 
 
 def test_text_extraction_and_direct_human_scoring() -> None:

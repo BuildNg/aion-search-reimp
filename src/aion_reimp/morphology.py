@@ -81,6 +81,15 @@ SCHEMA_JSON = json.dumps(GalaxyDecisionTree.model_json_schema(), separators=(","
 SCHEMA_SHA256 = hashlib.sha256(SCHEMA_JSON.encode("utf-8")).hexdigest()
 
 
+def model_vocab_size(model: Any, tokenizer: Any) -> int:
+    """Resolve flat and multimodal/nested Transformers configurations."""
+    for config in (model.config, getattr(model.config, "text_config", None)):
+        value = getattr(config, "vocab_size", None)
+        if value is not None:
+            return int(value)
+    return int(len(tokenizer))
+
+
 @dataclass(frozen=True)
 class MorphologyResult:
     object_id: str
@@ -254,7 +263,7 @@ class GemmaMorphologyExtractor:
         if tokenizer is None:
             raise ValueError("Gemma processor does not expose its tokenizer")
         tokenizer_info = xgr.TokenizerInfo.from_huggingface(
-            tokenizer, vocab_size=model.config.vocab_size
+            tokenizer, vocab_size=model_vocab_size(model, tokenizer)
         )
         compiler = xgr.GrammarCompiler(tokenizer_info)
         self.compiled_grammar = compiler.compile_json_schema(SCHEMA_JSON)
