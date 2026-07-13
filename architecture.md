@@ -37,8 +37,8 @@ Only current runnable configs and launch helpers remain live. A completed run pr
 | `manifest.py` | stable object IDs, benchmark exclusions, SHA-256 split, common-row selection, fingerprints | captioning, embeddings, optimization |
 | `datasets.py` | loading manifest-selected image/text vectors and batches | split derivation, metric policy |
 | `captioning.py` | matched free-form Qwen3-VL and pinned OpenRouter GPT description generation | morphology extraction, dataset joins, audit scoring |
-| `morphology.py` | text-only Gemma 4 Galaxy Zoo extraction, evidence validation, synthetic calibration | image access, caption generation, audit scoring |
-| `caption_audit.py` | join extracted answers to the 64 human decision paths and write row-level and aggregate audit artifacts | caption generation, extraction, retrieval evaluation |
+| `morphology.py` | released Galaxy Zoo Pydantic schema and prompt, XGrammar-constrained Gemma judging, path construction, synthetic calibration | image access, caption generation, audit scoring |
+| `caption_audit.py` | released human-path overlap, secondary per-question diagnostics, paired bootstraps | caption generation, extraction, retrieval evaluation |
 | `text_embeddings.py` | Qwen document/query encoding, instruction asymmetry, normalization, cache keys | captions, projection training |
 | `cache.py` | released-embedding ingestion, versioned object-keyed reads/writes, completeness checks | model policy, scientific selection |
 | `reference.py` | load pinned released config/safetensors into `model.py`, state mapping, output-equivalence fixture | training, metric definitions |
@@ -93,15 +93,17 @@ The caption audit is a separate bounded pipeline:
 same 64 images + same paper free-form prompt
   -> Qwen3-VL-8B descriptions
   -> GPT-4.1-mini descriptions
-  -> same text-only Gemma 4 26B A4B extractor
-       copied evidence span or not-stated
+  -> same text-only Gemma 4 26B A4B judge
+       released prompt + XGrammar-enforced released response schema
   -> caption_audit.py
-  -> caption_audit_rows.csv + caption_audit_metrics.json
+  -> released path-overlap score + secondary per-question audit
 ```
 
-The closed reference is `openai/gpt-4.1-mini-2025-04-14`, called locally through OpenRouter with the OpenAI provider pinned and no fallback. GPT and Qwen receive the same 64 images and the same free-form prompt from the released paper pipeline. `google/gemma-4-26B-A4B-it` at revision `5305c1e...` then receives description text only. Every supported extracted answer must cite a verbatim span in that description; absent information becomes `not-stated`. A small synthetic mapping set must reach 100% answer accuracy before the 64-object extraction starts.
+The closed reference is `openai/gpt-4.1-mini-2025-04-14`, called locally through OpenRouter with the OpenAI provider pinned and no fallback. GPT and Qwen receive the same 64 images and the same free-form prompt from the released paper pipeline. `google/gemma-4-26B-A4B-it` at revision `5305c1e...` then receives description text only. It receives the released GalaxyBench judge prompt verbatim. The released `GalaxyDecisionTree` Pydantic class is converted to JSON Schema, and XGrammar masks invalid next tokens during generation. A small synthetic mapping set must reach 100% answer accuracy before the 64-object judgment starts.
 
-The 300-word prompt limit is a hard captioner-compliance gate, counted by whitespace-delimited words after trimming. A response above 300 is preserved in the error artifact, receives no automatic retry, and invalidates that model's primary matched morphology readout. The preregistered recovery is a secondary analysis that truncates the original response to its first 300 words without another model call. GPT-4.1 Mini triggered this rule on 19 of 64 objects, so the deterministic fallback is active and all GPT morphology results are labelled secondary. The bounded local call completed for a conservative recorded cost of $0.04460.
+The prompt's request to stay under 300 words is soft verbosity guidance, matching the released pipeline. Caption code validates only that a response is non-empty: it never rejects, retries, or truncates text based on length. Word counts remain descriptive diagnostics. The v2 frozen caption artifacts restore every full response from the immutable raw text captured in v1, so neither captioner is called again.
+
+Gemma calibration and benchmark judging persist raw generated text before parsing. Schema enforcement happens during decoding, not through post-hoc repair, and Pydantic validates the resulting JSON again. The primary score reproduces the released intersection of judge and human-volunteer paths divided by human-path length; per-question accuracy and abstention remain secondary diagnostics.
 
 ## Training pipeline
 
@@ -184,7 +186,7 @@ Each run writes `results/<run_id>/`:
 | `tables.csv` | compact report-ready results |
 | `errors.jsonl` | structured failures or skipped rows, if any |
 
-Caption and text-embedding generation are dataset-cache jobs rather than training runs. They follow the same resolved-config, input-fingerprint, status, error-log, and completeness conventions. Phase 1 writes both free-form description caches, both evidence-bearing extraction caches, the extractor calibration result, matched row-level audits, aggregate metrics, and one direct comparison. The comparison includes a paired object-cluster bootstrap confidence interval for GPT-minus-Qwen accuracy, computed from the two row-level audits without another model call. Local GPT preparation additionally writes image-dimension preflight, per-request usage, and cost artifacts.
+Caption and text-embedding generation are dataset-cache jobs rather than training runs. They follow the same resolved-config, input-fingerprint, status, error-log, and completeness conventions. Phase 1 writes both free-form description caches, schema-constrained judge outputs, calibration results, released path-overlap audits, secondary per-question audits, and one direct comparison. Both GPT-minus-Qwen deltas use paired object bootstraps and require no additional model call. Local GPT preparation additionally writes image-dimension preflight, per-request usage, and cost artifacts.
 
 The 64-image screen may fail fast on invalid structured output. Before captioning beyond that screen, generation must instead preserve every unparseable response in `errors.jsonl` with object ID and error context so a long cache job remains auditable.
 

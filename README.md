@@ -4,7 +4,7 @@ Independent, config-driven reimplementation of the AION-Search alignment and ret
 
 ## Current scope
 
-Phase 0 is complete. The replacement Phase 1 protocol is implemented locally and awaits review before the GPT call, code sync, or THQL run. Phase 2 remains unlaunched.
+Phase 0 is complete. Phase 1 reuses the frozen Qwen and GPT descriptions, applies the released GalaxyBench judge prompt and Pydantic schema through XGrammar-constrained Gemma decoding, and reports released human-path overlap as its primary metric. Phase 2 remains unlaunched.
 
 ```text
 configs/              pinned Phase 0/1 definitions and Phase 2 smoke contract
@@ -30,7 +30,7 @@ python -m pytest -m "not cluster"
 
 Before a Phase 2 launch, build and inspect `data/gates/phase2_launch_contract_v1.json`. The contract records the passed Phase 0 reference gate and carries Phase 1 caption metrics as diagnostic evidence. Phase 1 caption quality does not manually block the engineering smoke run; only a failed Phase 0 reproducibility gate does.
 
-Local checks do not load model weights. Phase 1 first generates GPT-4.1-mini free-form descriptions locally through OpenRouter, then runs Qwen3-VL and the shared text-only Gemma extractor on THQL. Only GPT descriptions and usage metadata move to the cluster; `OPEN_ROUTER_KEY` stays local.
+Local checks do not load model weights. The frozen Qwen3-VL and GPT-4.1-mini descriptions are judged by the same text-only Gemma model on THQL. XGrammar enforces the released GalaxyBench response schema during decoding; `OPEN_ROUTER_KEY` never moves to the cluster.
 
 When work is stopped for review, the gate is after local code and tests are ready but before any GitHub push, cluster sync, or cluster run. The reviewer should be able to inspect the exact prompt, queries, config, and proposed commands at that point.
 

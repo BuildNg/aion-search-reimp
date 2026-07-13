@@ -17,62 +17,23 @@ class CaptionResult:
     description: str
     raw_response: str
     word_count: int
-    original_word_count: Optional[int] = None
-    compliance_failure: bool = False
-    fallback: Optional[str] = None
 
     def as_record(self) -> Dict[str, Any]:
-        record = {
+        return {
             "object_id": self.object_id,
             "description": self.description,
             "raw_response": self.raw_response,
             "word_count": self.word_count,
         }
-        if self.original_word_count is not None:
-            record["original_word_count"] = self.original_word_count
-        if self.compliance_failure:
-            record["compliance_failure"] = True
-        if self.fallback is not None:
-            record["fallback"] = self.fallback
-        return record
 
 
-def parse_caption_response(
-    object_id: str, response: str, max_words: int = 300
-) -> CaptionResult:
-    """Validate a free-form response without rewriting its scientific content."""
+def parse_caption_response(object_id: str, response: str) -> CaptionResult:
+    """Validate a non-empty response while preserving all returned text."""
     if not isinstance(response, str) or not response.strip():
         raise ValueError(f"Caption response is empty for {object_id}")
     description = response.strip()
     word_count = len(description.split())
-    if word_count > max_words:
-        raise ValueError(
-            f"Caption response exceeds {max_words} words for {object_id}: {word_count}"
-        )
     return CaptionResult(str(object_id), description, response, word_count)
-
-
-def truncate_caption_response(
-    object_id: str, response: str, max_words: int = 300
-) -> CaptionResult:
-    """Apply the preregistered no-reroll fallback after a word-limit failure."""
-    if not isinstance(response, str) or not response.strip():
-        raise ValueError(f"Caption response is empty for {object_id}")
-    words = response.strip().split()
-    if len(words) <= max_words:
-        raise ValueError(
-            f"Truncation fallback requires more than {max_words} words for {object_id}"
-        )
-    description = " ".join(words[:max_words])
-    return CaptionResult(
-        object_id=str(object_id),
-        description=description,
-        raw_response=response,
-        word_count=max_words,
-        original_word_count=len(words),
-        compliance_failure=True,
-        fallback=f"truncate_original_to_{max_words}_words",
-    )
 
 
 class OpenRouterCaptioner:
@@ -219,8 +180,6 @@ def append_caption_results(
     output_jsonl: Path,
     error_jsonl: Optional[Path] = None,
     max_error_rate: float = 0.0,
-    max_words: int = 300,
-    truncate_over_limit: bool = False,
 ) -> Dict[str, Any]:
     """Generate resumable object-keyed descriptions with an explicit error budget."""
     if not 0.0 <= max_error_rate < 1.0:
@@ -258,18 +217,8 @@ def append_caption_results(
                 raw_response: Optional[str] = None
                 try:
                     raw_response = captioner.generate_response(image_path)
-                    result = parse_caption_response(object_id, raw_response, max_words=max_words)
+                    result = parse_caption_response(object_id, raw_response)
                 except Exception as error:
-                    word_count = (
-                        len(raw_response.split())
-                        if isinstance(raw_response, str)
-                        else None
-                    )
-                    is_word_limit_failure = (
-                        truncate_over_limit
-                        and word_count is not None
-                        and word_count > max_words
-                    )
                     if error_handle is None:
                         raise
                     record = {
@@ -279,19 +228,9 @@ def append_caption_results(
                         "error_type": type(error).__name__,
                         "error": str(error),
                         "raw_response": raw_response,
-                        "word_count": word_count,
-                        "compliance_failure": is_word_limit_failure,
                     }
                     error_handle.write(json.dumps(record, sort_keys=True) + "\n")
                     error_handle.flush()
-                    if is_word_limit_failure:
-                        result = truncate_caption_response(
-                            object_id, raw_response, max_words=max_words
-                        )
-                        handle.write(json.dumps(result.as_record(), sort_keys=True) + "\n")
-                        handle.flush()
-                        completed.add(object_id)
-                        continue
                     failed.add(object_id)
                     if len(failed) > error_budget:
                         raise RuntimeError(

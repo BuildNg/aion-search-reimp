@@ -2,7 +2,7 @@ schema_version: 1
 kind: phase1
 
 run:
-  id: phase1_v1
+  id: phase1_v3
   output_root: results
   seed: 20260713
 
@@ -11,11 +11,6 @@ benchmark:
   revision: ebb13986d04b6b5e47529fb1fc68761839bffd75
   split: train
   input_dir: data/caption_screen_64
-
-caption_policy:
-  max_words: 300
-  exceedance: hard_compliance_failure
-  fallback: truncate_original_to_300_words_secondary_only_if_triggered
 
 captioners:
   qwen:
@@ -39,7 +34,9 @@ extractor:
   model_id: google/gemma-4-26B-A4B-it
   revision: 5305c1e72ea29c01f31a81230d52b375ba88b409
   model_path: /data2/cmdir/home/ioit_thql/trung_ng/astrobridge/models/gemma-4-26B-A4B-it
-  prompt_file: data/prompts/phase1_gemma_extractor_v1.txt
+  prompt_file: data/prompts/galaxybench_galaxyzoo_judge_released_v1.txt
+  prompt_sha256: ffcf61ac2eadde5c6a80a5e7b15ef4d29c30533189bd8f8e0c2abd19d84fbe10
+  structured_output_engine: xgrammar
   dtype: bfloat16
   max_new_tokens: 1536
   enable_thinking: false
@@ -49,7 +46,8 @@ extractor:
 
 artifacts:
   image_preflight: data/phase1/caption_screen_64_image_preflight_v1.json
-  gpt_descriptions: data/phase1/gpt41mini_freeform_64_v1.jsonl
+  qwen_descriptions: data/phase1/qwen3vl8b_freeform_64_full_v2.jsonl
+  gpt_descriptions: data/phase1/gpt41mini_freeform_64_full_v2.jsonl
   gpt_usage: data/phase1/gpt41mini_freeform_64_usage_v1.jsonl
   gpt_cost: data/phase1/gpt41mini_freeform_64_cost_v1.json
 
@@ -61,3 +59,5 @@ cost:
 
 audit:
   bootstrap_samples: 2000
+  primary_metric: released_decision_path_overlap
+  secondary_metric: per_question_accuracy

@@ -1,149 +1,227 @@
-"""Text-only Galaxy Zoo extraction for the replacement Phase 1 audit."""
+"""Schema-constrained Galaxy Zoo judging for the Phase 1 caption audit."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
+
+from pydantic import BaseModel, Field, ValidationError
 
 
-ANSWER_VALUES = {
-    "smooth-or-featured": {
-        "smooth",
-        "featured-or-disk",
-        "artifact",
-        "not-stated",
-    },
-    "how-rounded": {
-        "round",
-        "in-between",
-        "cigar-shaped",
-        "not-applicable",
-        "not-stated",
-    },
-    "disk-edge-on": {"yes", "no", "not-applicable", "not-stated"},
-    "edge-on-bulge": {
-        "boxy",
-        "none",
-        "rounded",
-        "not-applicable",
-        "not-stated",
-    },
-    "has-spiral-arms": {"yes", "no", "not-applicable", "not-stated"},
-    "spiral-winding": {
-        "tight",
-        "medium",
-        "loose",
-        "not-applicable",
-        "not-stated",
-    },
-    "spiral-arm-count": {
-        "1",
-        "2",
-        "3",
-        "4",
-        "more-than-4",
-        "cant-tell",
-        "not-applicable",
-        "not-stated",
-    },
-    "bar": {"strong", "weak", "no", "not-applicable", "not-stated"},
-    "bulge-size": {
-        "dominant",
-        "large",
-        "moderate",
-        "small",
-        "none",
-        "not-applicable",
-        "not-stated",
-    },
-    "merging": {
-        "none",
-        "minor-disturbance",
-        "major-disturbance",
-        "merger",
-        "not-applicable",
-        "not-stated",
-    },
-}
+class GalaxyDecisionTree(BaseModel):
+    """Released GalaxyBench response schema, reproduced field-for-field."""
+
+    overall_shape: Literal["smooth", "featured-or-disk", "artifact"] = Field(
+        ..., description="The overall galaxy shape classification"
+    )
+    roundness: Optional[
+        Literal["round", "in-between", "cigar-shaped", "not-mentioned"]
+    ] = Field(None, description="How rounded the galaxy is (only for smooth galaxies)")
+    edge_on: Optional[
+        Literal["edge-on-yes", "edge-on-no", "not-mentioned"]
+    ] = Field(
+        None,
+        description="Whether the galaxy is viewed edge-on (only for featured galaxies)",
+    )
+    edge_on_bulge: Optional[
+        Literal["boxy", "none", "rounded", "not-mentioned"]
+    ] = Field(None, description="Shape of the bulge for edge-on galaxies")
+    has_spiral_arms: Optional[
+        Literal["has-spiral-arms-yes", "has-spiral-arms-no", "not-mentioned"]
+    ] = Field(
+        None,
+        description=(
+            "Whether the galaxy has visible spiral arms "
+            "(only for non-edge-on featured galaxies)"
+        ),
+    )
+    spiral_winding: Optional[
+        Literal["tight", "medium", "loose", "not-mentioned"]
+    ] = Field(
+        None,
+        description="How tightly wound the spiral arms are (only for galaxies with spiral arms)",
+    )
+    spiral_arm_count: Optional[
+        Literal["1", "2", "3", "4", "more-than-4", "cant-tell", "not-mentioned"]
+    ] = Field(
+        None, description="Number of spiral arms (only for galaxies with spiral arms)"
+    )
+    bar: Optional[Literal["strong", "weak", "no", "not-mentioned"]] = Field(
+        None,
+        description="Strength of central bar feature (only for non-edge-on featured galaxies)",
+    )
+    bulge_size: Optional[
+        Literal["dominant", "large", "moderate", "small", "none", "not-mentioned"]
+    ] = Field(
+        None,
+        description="Size of the central bulge (only for non-edge-on featured galaxies)",
+    )
+    merging: Optional[
+        Literal[
+            "none",
+            "minor-disturbance",
+            "major-disturbance",
+            "merger",
+            "not-mentioned",
+        ]
+    ] = Field(
+        None,
+        description=(
+            "Signs of disturbance, interaction, or merging "
+            "(only for smooth and featured galaxies, NOT artifacts)"
+        ),
+    )
+
+
+SCHEMA_JSON = json.dumps(GalaxyDecisionTree.model_json_schema(), separators=(",", ":"))
+SCHEMA_SHA256 = hashlib.sha256(SCHEMA_JSON.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
 class MorphologyResult:
     object_id: str
+    tree: GalaxyDecisionTree
+    judge_path: List[str]
     answers: Dict[str, str]
-    evidence: Dict[str, Optional[str]]
     raw_response: str
 
     def as_record(self) -> Dict[str, Any]:
         return {
             "object_id": self.object_id,
+            "tree_json": self.tree.model_dump_json(exclude_none=False),
+            "judge_path_json": json.dumps(self.judge_path),
             "answers_json": json.dumps(self.answers, sort_keys=True),
-            "evidence_json": json.dumps(self.evidence, sort_keys=True),
             "raw_response": self.raw_response,
+            "schema_enforced": True,
+            "schema_sha256": SCHEMA_SHA256,
         }
 
 
-def _strip_fence(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        stripped = "\n".join(lines).strip()
-    return stripped
+def build_decision_tree_path(tree: GalaxyDecisionTree) -> List[str]:
+    """Match the released GalaxyZooJudge path construction exactly."""
+    path = [f"smooth-or-featured_{tree.overall_shape}"]
+    if tree.overall_shape == "smooth":
+        if tree.roundness:
+            path.append(
+                "how-rounded-not-mentioned"
+                if tree.roundness == "not-mentioned"
+                else f"how-rounded_{tree.roundness}"
+            )
+    elif tree.overall_shape == "featured-or-disk" and tree.edge_on:
+        if tree.edge_on == "not-mentioned":
+            path.append("disk-edge-on-not-mentioned")
+        elif tree.edge_on == "edge-on-yes":
+            path.append("disk-edge-on_yes")
+            if tree.edge_on_bulge:
+                path.append(
+                    "edge-on-bulge-not-mentioned"
+                    if tree.edge_on_bulge == "not-mentioned"
+                    else f"edge-on-bulge_{tree.edge_on_bulge}"
+                )
+        elif tree.edge_on == "edge-on-no":
+            path.append("disk-edge-on_no")
+            if tree.has_spiral_arms:
+                if tree.has_spiral_arms == "not-mentioned":
+                    path.append("has-spiral-arms-not-mentioned")
+                elif tree.has_spiral_arms == "has-spiral-arms-yes":
+                    path.append("has-spiral-arms_yes")
+                    if tree.spiral_winding:
+                        path.append(
+                            "spiral-winding-not-mentioned"
+                            if tree.spiral_winding == "not-mentioned"
+                            else f"spiral-winding_{tree.spiral_winding}"
+                        )
+                    if tree.spiral_arm_count:
+                        path.append(
+                            "spiral-arm-count-not-mentioned"
+                            if tree.spiral_arm_count == "not-mentioned"
+                            else f"spiral-arm-count_{tree.spiral_arm_count}"
+                        )
+                elif tree.has_spiral_arms == "has-spiral-arms-no":
+                    path.append("has-spiral-arms_no")
+            if tree.bar:
+                path.append(
+                    "bar-not-mentioned" if tree.bar == "not-mentioned" else f"bar_{tree.bar}"
+                )
+            if tree.bulge_size:
+                path.append(
+                    "bulge-size-not-mentioned"
+                    if tree.bulge_size == "not-mentioned"
+                    else f"bulge-size_{tree.bulge_size}"
+                )
+    if tree.overall_shape != "artifact" and tree.merging:
+        path.append(
+            "merging-not-mentioned"
+            if tree.merging == "not-mentioned"
+            else f"merging_{tree.merging}"
+        )
+    return path
 
 
-def _normalize_evidence(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip()).casefold()
+def _answer(value: Optional[str]) -> str:
+    return "not-stated" if value in {None, "not-mentioned"} else str(value)
 
 
-def parse_morphology_response(
-    object_id: str,
-    description: str,
-    response: str,
-) -> MorphologyResult:
+def decision_tree_answers(tree: GalaxyDecisionTree) -> Dict[str, str]:
+    """Normalize the released tree for the secondary per-question diagnostic."""
+    answers = {
+        "smooth-or-featured": tree.overall_shape,
+        "how-rounded": "not-applicable",
+        "disk-edge-on": "not-applicable",
+        "edge-on-bulge": "not-applicable",
+        "has-spiral-arms": "not-applicable",
+        "spiral-winding": "not-applicable",
+        "spiral-arm-count": "not-applicable",
+        "bar": "not-applicable",
+        "bulge-size": "not-applicable",
+        "merging": "not-applicable",
+    }
+    if tree.overall_shape == "smooth":
+        answers["how-rounded"] = _answer(tree.roundness)
+        answers["merging"] = _answer(tree.merging)
+    elif tree.overall_shape == "featured-or-disk":
+        answers["merging"] = _answer(tree.merging)
+        edge_on = _answer(tree.edge_on)
+        answers["disk-edge-on"] = {
+            "edge-on-yes": "yes",
+            "edge-on-no": "no",
+        }.get(edge_on, edge_on)
+        if tree.edge_on == "edge-on-yes":
+            answers["edge-on-bulge"] = _answer(tree.edge_on_bulge)
+        elif tree.edge_on == "edge-on-no":
+            spiral = _answer(tree.has_spiral_arms)
+            answers["has-spiral-arms"] = {
+                "has-spiral-arms-yes": "yes",
+                "has-spiral-arms-no": "no",
+            }.get(spiral, spiral)
+            if tree.has_spiral_arms == "has-spiral-arms-yes":
+                answers["spiral-winding"] = _answer(tree.spiral_winding)
+                answers["spiral-arm-count"] = _answer(tree.spiral_arm_count)
+            answers["bar"] = _answer(tree.bar)
+            answers["bulge-size"] = _answer(tree.bulge_size)
+    return answers
+
+
+def parse_morphology_response(object_id: str, response: str) -> MorphologyResult:
     try:
-        payload = json.loads(_strip_fence(response))
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Morphology response is not valid JSON for {object_id}") from error
-    if set(payload) != {"answers"} or not isinstance(payload["answers"], dict):
-        raise ValueError(f"Morphology response must contain only answers for {object_id}")
-    if set(payload["answers"]) != set(ANSWER_VALUES):
-        raise ValueError(f"Morphology response has the wrong question fields for {object_id}")
-
-    description_normalized = _normalize_evidence(description)
-    answers: Dict[str, str] = {}
-    evidence: Dict[str, Optional[str]] = {}
-    for question, item in payload["answers"].items():
-        if not isinstance(item, dict) or set(item) != {"value", "evidence"}:
-            raise ValueError(f"{question} must contain value and evidence for {object_id}")
-        value = item["value"]
-        cited = item["evidence"]
-        if value not in ANSWER_VALUES[question]:
-            raise ValueError(f"Invalid {question} answer {value!r} for {object_id}")
-        if value in {"not-stated", "not-applicable"}:
-            if cited not in {None, ""}:
-                raise ValueError(f"{question} must not cite evidence for {value} in {object_id}")
-            cited = None
-        else:
-            if not isinstance(cited, str) or not cited.strip():
-                raise ValueError(f"{question} requires copied evidence for {object_id}")
-            if _normalize_evidence(cited) not in description_normalized:
-                raise ValueError(f"{question} evidence is absent from the caption for {object_id}")
-            cited = cited.strip()
-        answers[question] = str(value)
-        evidence[question] = cited
-    return MorphologyResult(str(object_id), answers, evidence, response)
+        tree = GalaxyDecisionTree.model_validate_json(response.strip())
+    except ValidationError as error:
+        raise ValueError(f"Invalid schema-constrained response for {object_id}") from error
+    return MorphologyResult(
+        object_id=str(object_id),
+        tree=tree,
+        judge_path=build_decision_tree_path(tree),
+        answers=decision_tree_answers(tree),
+        raw_response=response,
+    )
 
 
 class GemmaMorphologyExtractor:
-    """Gemma 4 text-only extractor; it never receives an image."""
+    """Gemma 4 judge with XGrammar-constrained decoding."""
 
     def __init__(
         self,
@@ -156,7 +234,10 @@ class GemmaMorphologyExtractor:
         model: Any = None,
     ) -> None:
         if enable_thinking:
-            raise ValueError("The primary Phase 1 extractor must run with thinking disabled")
+            raise ValueError("The primary Phase 1 judge must run with thinking disabled")
+        import xgrammar as xgr
+        from xgrammar.contrib.hf import LogitsProcessor
+
         if processor is None or model is None:
             import torch
             from transformers import AutoModelForCausalLM, AutoProcessor
@@ -169,13 +250,30 @@ class GemmaMorphologyExtractor:
                 device_map="auto",
                 local_files_only=True,
             ).eval()
+        tokenizer = getattr(processor, "tokenizer", None)
+        if tokenizer is None:
+            raise ValueError("Gemma processor does not expose its tokenizer")
+        tokenizer_info = xgr.TokenizerInfo.from_huggingface(
+            tokenizer, vocab_size=model.config.vocab_size
+        )
+        compiler = xgr.GrammarCompiler(tokenizer_info)
+        self.compiled_grammar = compiler.compile_json_schema(SCHEMA_JSON)
+        self._logits_processor_class = LogitsProcessor
+        self._xgrammar_version = getattr(xgr, "__version__", "unknown")
         self.processor = processor
         self.model = model
-        self.prompt_template = prompt_template
+        # The released triple-quoted prompt has no trailing newline; text files do.
+        self.prompt_template = prompt_template.rstrip("\r\n")
         self.max_new_tokens = int(max_new_tokens)
         self.enable_thinking = bool(enable_thinking)
 
     def generate_response(self, description: str) -> str:
+        response, _ = self.generate_response_with_metadata(description)
+        return response
+
+    def generate_response_with_metadata(
+        self, description: str
+    ) -> tuple[str, Dict[str, Any]]:
         import torch
 
         prompt = self.prompt_template.replace("{description}", description)
@@ -188,20 +286,34 @@ class GemmaMorphologyExtractor:
         )
         inputs = self.processor(text=text, return_tensors="pt").to(self.model.device)
         input_length = inputs["input_ids"].shape[-1]
+        logits_processor = self._logits_processor_class(self.compiled_grammar)
         with torch.inference_mode():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=False,
+                logits_processor=[logits_processor],
             )
         decoded = self.processor.decode(outputs[0][input_length:], skip_special_tokens=False)
-        if hasattr(self.processor, "parse_response"):
-            decoded = _response_text(self.processor.parse_response(decoded))
-        return decoded.strip()
-
-    def extract(self, object_id: str, description: str) -> MorphologyResult:
-        response = self.generate_response(description)
-        return parse_morphology_response(object_id, description, response)
+        used_parse_response = hasattr(self.processor, "parse_response")
+        parsed_type = None
+        if used_parse_response:
+            parsed = self.processor.parse_response(decoded)
+            parsed_type = type(parsed).__name__
+            response = _response_text(parsed)
+        else:
+            response = self.processor.decode(
+                outputs[0][input_length:], skip_special_tokens=True
+            )
+        return response.strip(), {
+            "decoded_with_special_tokens": decoded,
+            "used_processor_parse_response": used_parse_response,
+            "processor_parse_response_type": parsed_type,
+            "schema_enforced": True,
+            "schema_sha256": SCHEMA_SHA256,
+            "structured_output_engine": "xgrammar",
+            "xgrammar_version": self._xgrammar_version,
+        }
 
 
 def _response_text(parsed: Any) -> str:
@@ -267,9 +379,7 @@ def append_morphology_results(
                 raw_response: Optional[str] = None
                 try:
                     raw_response = extractor.generate_response(description)
-                    result = parse_morphology_response(
-                        object_id, description, raw_response
-                    )
+                    result = parse_morphology_response(object_id, raw_response)
                 except Exception as error:
                     if error_handle is None:
                         raise
@@ -322,38 +432,106 @@ def _read_object_ids(path: Path) -> set[str]:
     }
 
 
-def calibration_metrics(extractor: Any, calibration_path: Path) -> Dict[str, Any]:
+def _append_jsonl(path: Optional[Path], record: Mapping[str, Any]) -> None:
+    if path is None:
+        return
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(dict(record), sort_keys=True) + "\n")
+        handle.flush()
+
+
+def calibration_metrics(
+    extractor: Any,
+    calibration_path: Path,
+    response_jsonl: Optional[Path] = None,
+    error_jsonl: Optional[Path] = None,
+    continue_on_error: bool = False,
+) -> Dict[str, Any]:
     records = [
         json.loads(line)
         for line in Path(calibration_path).read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     if not records:
-        raise ValueError("Extractor calibration set is empty")
+        raise ValueError("Judge calibration set is empty")
     answer_total = 0
     answer_correct = 0
     row_exact = 0
     row_records = []
+    parse_errors = 0
     for record in records:
-        result = extractor.extract(str(record["object_id"]), str(record["description"]))
+        object_id = str(record["object_id"])
+        description = str(record["description"])
         expected = {str(key): str(value) for key, value in record["expected"].items()}
-        correctness = {key: result.answers.get(key) == value for key, value in expected.items()}
-        answer_total += len(correctness)
+        answer_total += len(expected)
+        raw_response = None
+        generation_metadata: Dict[str, Any] = {}
+        try:
+            if hasattr(extractor, "generate_response_with_metadata"):
+                raw_response, generation_metadata = extractor.generate_response_with_metadata(
+                    description
+                )
+            else:
+                raw_response = extractor.generate_response(description)
+            _append_jsonl(
+                response_jsonl,
+                {
+                    "object_id": object_id,
+                    "description": description,
+                    "raw_response": raw_response,
+                    "generation_metadata": generation_metadata,
+                },
+            )
+            result = parse_morphology_response(object_id, raw_response)
+        except Exception as error:
+            parse_errors += 1
+            _append_jsonl(
+                error_jsonl,
+                {
+                    "object_id": object_id,
+                    "description": description,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "raw_response": raw_response,
+                    "generation_metadata": generation_metadata,
+                },
+            )
+            row_records.append(
+                {
+                    "object_id": object_id,
+                    "parse_valid": False,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                }
+            )
+            if continue_on_error:
+                continue
+            raise
+        correctness = {
+            key: result.answers.get(key) == value for key, value in expected.items()
+        }
         answer_correct += sum(correctness.values())
         exact = all(correctness.values())
         row_exact += int(exact)
         row_records.append(
             {
-                "object_id": str(record["object_id"]),
+                "object_id": object_id,
+                "parse_valid": True,
                 "exact": exact,
                 "correctness": correctness,
                 "answers": result.answers,
+                "judge_path": result.judge_path,
             }
         )
     return {
         "rows": len(records),
         "row_exact_accuracy": row_exact / len(records),
         "answers": answer_total,
-        "answer_accuracy": answer_correct / answer_total,
+        "answer_accuracy": 0.0 if answer_total == 0 else answer_correct / answer_total,
+        "parse_errors": parse_errors,
+        "schema_enforced": True,
+        "schema_sha256": SCHEMA_SHA256,
         "records": row_records,
     }

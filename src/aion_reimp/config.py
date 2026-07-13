@@ -55,7 +55,6 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
     elif kind == "phase1":
         kind_top = {
             "benchmark",
-            "caption_policy",
             "captioners",
             "extractor",
             "artifacts",
@@ -146,18 +145,6 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             {"repo_id", "revision", "split", "input_dir"},
         )
         _require_commit(benchmark["revision"], "benchmark.revision")
-        caption_policy = _section(
-            data,
-            "caption_policy",
-            {"max_words", "exceedance", "fallback"},
-            {"max_words", "exceedance", "fallback"},
-        )
-        if caption_policy != {
-            "max_words": 300,
-            "exceedance": "hard_compliance_failure",
-            "fallback": "truncate_original_to_300_words_secondary_only_if_triggered",
-        }:
-            raise ConfigError("Phase 1 caption compliance policy is locked")
         captioners = data.get("captioners")
         if not isinstance(captioners, dict) or set(captioners) != {"qwen", "gpt"}:
             raise ConfigError("captioners must define exactly qwen and gpt")
@@ -205,6 +192,8 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "revision",
                 "model_path",
                 "prompt_file",
+                "prompt_sha256",
+                "structured_output_engine",
                 "dtype",
                 "max_new_tokens",
                 "enable_thinking",
@@ -217,6 +206,8 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "revision",
                 "model_path",
                 "prompt_file",
+                "prompt_sha256",
+                "structured_output_engine",
                 "dtype",
                 "max_new_tokens",
                 "enable_thinking",
@@ -230,6 +221,11 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             raise ConfigError("Phase 1 extractor must pin google/gemma-4-26B-A4B-it")
         if extractor["enable_thinking"] is not False:
             raise ConfigError("Primary Gemma extractor must disable thinking")
+        if extractor["structured_output_engine"] != "xgrammar":
+            raise ConfigError("Phase 1 structured output engine must be xgrammar")
+        prompt_hash = str(extractor["prompt_sha256"])
+        if len(prompt_hash) != 64 or any(character not in "0123456789abcdef" for character in prompt_hash):
+            raise ConfigError("extractor.prompt_sha256 must be a lowercase SHA-256 digest")
         if float(extractor["calibration_min_answer_accuracy"]) != 1.0:
             raise ConfigError("Extractor calibration must require answer accuracy 1.0")
         if not 0.0 <= float(extractor["max_error_rate"]) < 1.0:
@@ -238,17 +234,33 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         _section(
             data,
             "artifacts",
-            {"image_preflight", "gpt_descriptions", "gpt_usage", "gpt_cost"},
-            {"image_preflight", "gpt_descriptions", "gpt_usage", "gpt_cost"},
+            {
+                "image_preflight",
+                "qwen_descriptions",
+                "gpt_descriptions",
+                "gpt_usage",
+                "gpt_cost",
+            },
+            {
+                "image_preflight",
+                "qwen_descriptions",
+                "gpt_descriptions",
+                "gpt_usage",
+                "gpt_cost",
+            },
         )
         audit = _section(
             data,
             "audit",
-            {"bootstrap_samples"},
-            {"bootstrap_samples"},
+            {"bootstrap_samples", "primary_metric", "secondary_metric"},
+            {"bootstrap_samples", "primary_metric", "secondary_metric"},
         )
         if not isinstance(audit["bootstrap_samples"], int) or audit["bootstrap_samples"] <= 0:
             raise ConfigError("audit.bootstrap_samples must be positive")
+        if audit["primary_metric"] != "released_decision_path_overlap":
+            raise ConfigError("Phase 1 primary metric must reproduce released path overlap")
+        if audit["secondary_metric"] != "per_question_accuracy":
+            raise ConfigError("Phase 1 secondary metric must be per-question accuracy")
         cost = _section(
             data,
             "cost",

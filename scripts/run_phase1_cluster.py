@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import hashlib
 import json
 import shlex
@@ -13,8 +12,12 @@ from pathlib import Path
 import pandas as pd
 
 from aion_reimp.artifacts import initialize_run, tracked_run
-from aion_reimp.caption_audit import paired_accuracy_delta, write_audit
-from aion_reimp.captioning import QwenCaptioner, append_caption_results
+from aion_reimp.caption_audit import (
+    paired_accuracy_delta,
+    paired_path_score_delta,
+    write_audit,
+    write_path_audit,
+)
 from aion_reimp.config import load_config
 from aion_reimp.datasets import materialize_caption_screen
 from aion_reimp.morphology import (
@@ -39,6 +42,10 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _description_stats(rows: pd.DataFrame) -> dict:
@@ -76,12 +83,19 @@ def main() -> None:
     if missing_images:
         raise FileNotFoundError(f"Missing caption-screen image: {missing_images[0]}")
 
+    qwen_source = Path(config["artifacts"]["qwen_descriptions"])
+    qwen_descriptions = _read_jsonl(qwen_source)
+    if len(qwen_descriptions) != 64 or qwen_descriptions["object_id"].astype(str).nunique() != 64:
+        raise ValueError("Frozen Qwen descriptions must contain exactly 64 objects")
+
     gpt_source = Path(config["artifacts"]["gpt_descriptions"])
     gpt_descriptions = _read_jsonl(gpt_source)
     if len(gpt_descriptions) != 64 or gpt_descriptions["object_id"].astype(str).nunique() != 64:
         raise ValueError("Frozen GPT free-form descriptions must contain exactly 64 objects")
     if set(gpt_descriptions["object_id"].astype(str)) != set(labels["object_id"].astype(str)):
         raise ValueError("GPT free-form descriptions do not match the benchmark object set")
+    if set(qwen_descriptions["object_id"].astype(str)) != set(labels["object_id"].astype(str)):
+        raise ValueError("Qwen free-form descriptions do not match the benchmark object set")
 
     with tracked_run(
         output_root,
@@ -90,34 +104,12 @@ def main() -> None:
             "protocol": "freeform_caption_shared_gemma_extractor",
         },
     ):
-        qwen_spec = config["captioners"]["qwen"]
-        caption_prompt_path = Path(qwen_spec["prompt_file"])
-        qwen = QwenCaptioner(
-            qwen_spec["model_id"],
-            qwen_spec["revision"],
-            caption_prompt_path.read_text(encoding="utf-8"),
-            dtype=qwen_spec["dtype"],
-            max_new_tokens=qwen_spec["max_new_tokens"],
-        )
+        caption_prompt_path = Path(config["captioners"]["qwen"]["prompt_file"])
         qwen_path = output_root / "qwen_descriptions.jsonl"
-        append_caption_results(
-            qwen,
-            labels.to_dict(orient="records"),
-            qwen_path,
-            error_jsonl=output_root / "qwen_caption_errors.jsonl",
-            max_error_rate=0.0,
-            max_words=config["caption_policy"]["max_words"],
-            truncate_over_limit=True,
-        )
-        del qwen
-        gc.collect()
-        import torch
-
-        torch.cuda.empty_cache()
+        shutil.copy2(qwen_source, qwen_path)
 
         frozen_gpt_path = output_root / "gpt41mini_descriptions.jsonl"
         shutil.copy2(gpt_source, frozen_gpt_path)
-        qwen_descriptions = _read_jsonl(qwen_path)
 
         extractor_spec = config["extractor"]
         extractor_prompt_path = Path(extractor_spec["prompt_file"])
@@ -128,7 +120,15 @@ def main() -> None:
             max_new_tokens=extractor_spec["max_new_tokens"],
             enable_thinking=extractor_spec["enable_thinking"],
         )
-        calibration = calibration_metrics(extractor, Path(extractor_spec["calibration_file"]))
+        actual_prompt_sha256 = _sha256_text(extractor.prompt_template)
+        if actual_prompt_sha256 != extractor_spec["prompt_sha256"]:
+            raise RuntimeError("Released GalaxyBench judge prompt hash mismatch")
+        calibration = calibration_metrics(
+            extractor,
+            Path(extractor_spec["calibration_file"]),
+            response_jsonl=output_root / "extractor_calibration_responses.jsonl",
+            error_jsonl=output_root / "extractor_calibration_errors.jsonl",
+        )
         (output_root / "extractor_calibration.json").write_text(
             json.dumps(calibration, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -139,8 +139,10 @@ def main() -> None:
                 "Gemma extractor failed its preregistered synthetic calibration gate"
             )
 
-        audit_metrics = {}
-        audit_rows = {}
+        question_metrics = {}
+        question_rows = {}
+        path_metrics = {}
+        path_rows = {}
         for name, descriptions in (
             ("qwen3vl_8b", qwen_descriptions),
             ("gpt41mini", gpt_descriptions),
@@ -162,62 +164,67 @@ def main() -> None:
                 bootstrap_samples=config["audit"]["bootstrap_samples"],
                 seed=config["run"]["seed"],
             )
-            audit_metrics[name] = json.loads(
+            write_path_audit(
+                extractions,
+                labels,
+                audit_dir,
+                bootstrap_samples=config["audit"]["bootstrap_samples"],
+                seed=config["run"]["seed"],
+            )
+            question_metrics[name] = json.loads(
                 (audit_dir / "caption_audit_metrics.json").read_text(encoding="utf-8")
             )
-            audit_rows[name] = pd.read_csv(audit_dir / "caption_audit_rows.csv")
+            question_rows[name] = pd.read_csv(audit_dir / "caption_audit_rows.csv")
+            path_metrics[name] = json.loads(
+                (audit_dir / "judge_path_audit_metrics.json").read_text(encoding="utf-8")
+            )
+            path_rows[name] = pd.read_csv(audit_dir / "judge_path_audit_rows.csv")
 
-        paired_delta = paired_accuracy_delta(
-            audit_rows["qwen3vl_8b"],
-            audit_rows["gpt41mini"],
+        paired_question_delta = paired_accuracy_delta(
+            question_rows["qwen3vl_8b"],
+            question_rows["gpt41mini"],
+            bootstrap_samples=config["audit"]["bootstrap_samples"],
+            seed=config["run"]["seed"],
+        )
+        paired_path_delta = paired_path_score_delta(
+            path_rows["qwen3vl_8b"],
+            path_rows["gpt41mini"],
             bootstrap_samples=config["audit"]["bootstrap_samples"],
             seed=config["run"]["seed"],
         )
 
         comparison = {
-            "protocol": "free-form descriptions followed by the same text-only Gemma extractor",
+            "protocol": (
+                "free-form descriptions judged by the same schema-constrained Gemma model "
+                "using the released GalaxyBench prompt and path score"
+            ),
+            "primary_metric": config["audit"]["primary_metric"],
+            "secondary_metric": config["audit"]["secondary_metric"],
             "caption_prompt_sha256": _sha256(caption_prompt_path),
-            "extractor_prompt_sha256": _sha256(extractor_prompt_path),
+            "extractor_prompt_file_sha256": _sha256(extractor_prompt_path),
+            "extractor_prompt_sha256": actual_prompt_sha256,
             "extractor_model": {
                 "model_id": extractor_spec["model_id"],
                 "revision": extractor_spec["revision"],
                 "enable_thinking": extractor_spec["enable_thinking"],
+                "structured_output_engine": extractor_spec["structured_output_engine"],
             },
-            "gpt41mini": audit_metrics["gpt41mini"],
-            "qwen3vl_8b": audit_metrics["qwen3vl_8b"],
+            "released_path_overlap": {
+                "gpt41mini": path_metrics["gpt41mini"],
+                "qwen3vl_8b": path_metrics["qwen3vl_8b"],
+                "paired_delta_gpt_minus_qwen": paired_path_delta,
+            },
+            "per_question_diagnostic": {
+                "gpt41mini": question_metrics["gpt41mini"],
+                "qwen3vl_8b": question_metrics["qwen3vl_8b"],
+                "paired_delta_gpt_minus_qwen": paired_question_delta,
+            },
             "description_lengths": {
                 "gpt41mini": _description_stats(gpt_descriptions),
                 "qwen3vl_8b": _description_stats(qwen_descriptions),
             },
-            "caption_compliance": {
-                "gpt41mini": {
-                    "failures": int(
-                        gpt_descriptions.get("compliance_failure", pd.Series(dtype=bool))
-                        .fillna(False)
-                        .astype(bool)
-                        .sum()
-                    ),
-                    "readout": "secondary_truncated_fallback"
-                    if "compliance_failure" in gpt_descriptions
-                    and gpt_descriptions["compliance_failure"].fillna(False).astype(bool).any()
-                    else "primary_matched",
-                },
-                "qwen3vl_8b": {
-                    "failures": int(
-                        qwen_descriptions.get("compliance_failure", pd.Series(dtype=bool))
-                        .fillna(False)
-                        .astype(bool)
-                        .sum()
-                    ),
-                    "readout": "secondary_truncated_fallback"
-                    if "compliance_failure" in qwen_descriptions
-                    and qwen_descriptions["compliance_failure"].fillna(False).astype(bool).any()
-                    else "primary_matched",
-                },
-            },
-            "paired_accuracy_delta_gpt_minus_qwen": paired_delta,
             "gpt_source_sha256": _sha256(gpt_source),
-            "qwen_source_sha256": _sha256(qwen_path),
+            "qwen_source_sha256": _sha256(qwen_source),
         }
         (output_root / "comparison.json").write_text(
             json.dumps(comparison, indent=2, sort_keys=True), encoding="utf-8"

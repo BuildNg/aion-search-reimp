@@ -1,0 +1,18 @@
+{
+  "gpt": {
+    "output": "data\\phase1\\gpt41mini_freeform_64_full_v2.jsonl",
+    "output_sha256": "a5fe15a36d8bfeb0c11a7590c51eca54248191c7ff07b2a70986cd642e4d4f92",
+    "rows": 64,
+    "source": "data\\phase1\\gpt41mini_freeform_64_v1.jsonl",
+    "source_sha256": "25d06d7790898459eef1869b3685f6220c255f198843b84dcdc1634e1c24f336",
+    "transform": "restore_description_from_preserved_raw_response_without_truncation"
+  },
+  "qwen": {
+    "output": "data\\phase1\\qwen3vl8b_freeform_64_full_v2.jsonl",
+    "output_sha256": "dc1f43cf07567ed660829808be4f194265bdfe5611e64603be9b3b1c329ccebc",
+    "rows": 64,
+    "source": "results\\phase1_v1_failed_56589\\qwen_descriptions.jsonl",
+    "source_sha256": "3da4094da6d791a3a174f8644f032b29259cd406d684d16fcaaeff51ea84794a",
+    "transform": "restore_description_from_preserved_raw_response_without_truncation"
+  }
+}

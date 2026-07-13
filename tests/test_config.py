@@ -24,10 +24,10 @@ def test_gpt_reference_rejects_unpinned_alias() -> None:
         validate_config(data)
 
 
-def test_phase1_caption_compliance_policy_is_locked() -> None:
+def test_phase1_rejects_a_caption_enforcement_policy() -> None:
     data = yaml.safe_load((ROOT / "configs" / "phase1.yaml").read_text(encoding="utf-8"))
-    data["caption_policy"]["max_words"] = 301
-    with pytest.raises(ConfigError, match="compliance policy"):
+    data["caption_policy"] = {"max_words": 300}
+    with pytest.raises(ConfigError, match="Unknown top-level keys"):
         validate_config(data)
 
 

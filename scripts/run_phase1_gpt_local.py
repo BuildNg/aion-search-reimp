@@ -12,11 +12,7 @@ from typing import Any, Dict
 import pandas as pd
 from PIL import Image
 
-from aion_reimp.captioning import (
-    OpenRouterCaptioner,
-    parse_caption_response,
-    truncate_caption_response,
-)
+from aion_reimp.captioning import OpenRouterCaptioner, parse_caption_response
 from aion_reimp.config import load_config
 
 
@@ -142,39 +138,6 @@ def main() -> None:
     if completed - set(labels["object_id"].astype(str)):
         raise ValueError("GPT resume artifact contains an unexpected object")
 
-    max_words = int(config["caption_policy"]["max_words"])
-    fallback_policy = str(config["caption_policy"]["fallback"])
-    expected_fallback = f"truncate_original_to_{max_words}_words_secondary_only_if_triggered"
-    if fallback_policy != expected_fallback:
-        raise ValueError(f"Unsupported caption fallback policy: {fallback_policy}")
-
-    # Recover a response preserved by the original hard-stop runner without
-    # rerolling it. Its exact usage metadata was not persisted, so charge the
-    # full per-request reserve and mark that conservative accounting explicitly.
-    error_records = _read_jsonl(errors_path)
-    for error_record in error_records:
-        object_id = str(error_record.get("object_id"))
-        raw_response = error_record.get("raw_response")
-        if object_id in completed or not isinstance(raw_response, str):
-            continue
-        if int(error_record.get("word_count") or 0) <= max_words:
-            continue
-        result = truncate_caption_response(object_id, raw_response, max_words=max_words)
-        _append_jsonl(descriptions_path, result.as_record())
-        _append_jsonl(
-            usage_path,
-            {
-                "object_id": object_id,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "effective_cost_usd": float(cost_spec["reserve_per_request_usd"]),
-                "usage_available": False,
-                "accounting": "conservative_request_reserve_after_pre_fallback_hard_stop",
-            },
-        )
-        completed.add(object_id)
-        usage_records = _read_jsonl(usage_path)
-
     total_cost = sum(float(record["effective_cost_usd"]) for record in usage_records)
     total_prompt_tokens = sum(int(record["prompt_tokens"]) for record in usage_records)
     total_completion_tokens = sum(int(record["completion_tokens"]) for record in usage_records)
@@ -201,30 +164,7 @@ def main() -> None:
         usage = None
         try:
             response, usage = captioner.generate_response_with_metadata(Path(row.image_path))
-            try:
-                result = parse_caption_response(object_id, response, max_words=max_words)
-            except ValueError as error:
-                word_count = len(response.split())
-                if word_count <= max_words:
-                    raise
-                request_cost = _estimated_cost(usage, cost_spec)
-                _append_jsonl(
-                    errors_path,
-                    {
-                        "object_id": object_id,
-                        "image_path": str(row.image_path),
-                        "error_type": type(error).__name__,
-                        "error": str(error),
-                        "raw_response": response,
-                        "word_count": word_count,
-                        "usage": usage,
-                        "effective_cost_usd": request_cost,
-                        "compliance_failure": True,
-                    },
-                )
-                result = truncate_caption_response(
-                    object_id, response, max_words=max_words
-                )
+            result = parse_caption_response(object_id, response)
         except Exception as error:
             _append_jsonl(
                 errors_path,
@@ -266,20 +206,6 @@ def main() -> None:
                 "model_id": gpt["model_id"],
                 "provider": gpt["provider"],
                 "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-                "compliance_failures": sum(
-                    bool(record.get("compliance_failure"))
-                    for record in _read_jsonl(descriptions_path)
-                ),
-                "primary_matched_readout_valid": not any(
-                    bool(record.get("compliance_failure"))
-                    for record in _read_jsonl(descriptions_path)
-                ),
-                "readout": "secondary_truncated_fallback"
-                if any(
-                    bool(record.get("compliance_failure"))
-                    for record in _read_jsonl(descriptions_path)
-                )
-                else "primary_matched",
             },
             indent=2,
             sort_keys=True,
