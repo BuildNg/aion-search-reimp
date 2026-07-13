@@ -39,23 +39,42 @@ def _require_commit(value: Any, field: str) -> None:
 
 
 def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
-    common_top = {
-        "schema_version",
-        "kind",
-        "run",
-        "queries",
-    }
+    common_top = {"schema_version", "kind", "run"}
     if data.get("schema_version") != 1:
         raise ConfigError("schema_version must equal 1")
 
     kind = data.get("kind")
-    if kind not in {"phase0_reference", "phase1_open_text"}:
+    if kind not in {
+        "phase0_reference",
+        "phase1",
+        "phase2_smoke",
+    }:
         raise ConfigError(f"Unsupported config kind: {kind!r}")
-    kind_top = (
-        {"reference_model", "reference_gate", "training_data", "benchmarks"}
-        if kind == "phase0_reference"
-        else {"captioning", "text_embedding", "released_text", "caption_audit"}
-    )
+    if kind == "phase0_reference":
+        kind_top = {"queries", "reference_model", "reference_gate", "training_data", "benchmarks"}
+    elif kind == "phase1":
+        kind_top = {
+            "benchmark",
+            "caption_policy",
+            "captioners",
+            "extractor",
+            "artifacts",
+            "cost",
+            "audit",
+        }
+    else:
+        kind_top = {
+            "queries",
+            "prerequisites",
+            "source_data",
+            "exclusions",
+            "captioning",
+            "text_embedding",
+            "caches",
+            "model",
+            "training",
+            "conditions",
+        }
     allowed_top = common_top | kind_top
     unknown = sorted(set(data) - allowed_top)
     missing_top = sorted(allowed_top - set(data))
@@ -65,14 +84,16 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         raise ConfigError(f"Missing top-level keys for {kind}: {missing_top}")
 
     _section(data, "run", {"id", "output_root", "seed"}, {"id", "output_root", "seed"})
-    queries = _section(
-        data,
-        "queries",
-        {"file", "openai_model", "openai_cache", "qwen_instruction"},
-        {"file", "openai_model", "openai_cache", "qwen_instruction"},
-    )
-    if queries["openai_model"] != "text-embedding-3-large":
-        raise ConfigError("R-OAI query model must be text-embedding-3-large")
+    queries = None
+    if kind in {"phase0_reference", "phase2_smoke"}:
+        queries = _section(
+            data,
+            "queries",
+            {"file", "openai_model", "openai_cache", "qwen_instruction"},
+            {"file", "openai_model", "openai_cache", "qwen_instruction"},
+        )
+        if queries["openai_model"] != "text-embedding-3-large":
+            raise ConfigError("R-OAI query model must be text-embedding-3-large")
 
     if kind == "phase0_reference":
         reference = _section(
@@ -117,7 +138,212 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                     f"missing={sorted(missing_benchmark)}"
                 )
             _require_commit(benchmark["revision"], f"benchmarks[{index}].revision")
+    elif kind == "phase1":
+        benchmark = _section(
+            data,
+            "benchmark",
+            {"repo_id", "revision", "split", "input_dir"},
+            {"repo_id", "revision", "split", "input_dir"},
+        )
+        _require_commit(benchmark["revision"], "benchmark.revision")
+        caption_policy = _section(
+            data,
+            "caption_policy",
+            {"max_words", "exceedance", "fallback"},
+            {"max_words", "exceedance", "fallback"},
+        )
+        if caption_policy != {
+            "max_words": 300,
+            "exceedance": "hard_compliance_failure",
+            "fallback": "truncate_original_to_300_words_secondary_only_if_triggered",
+        }:
+            raise ConfigError("Phase 1 caption compliance policy is locked")
+        captioners = data.get("captioners")
+        if not isinstance(captioners, dict) or set(captioners) != {"qwen", "gpt"}:
+            raise ConfigError("captioners must define exactly qwen and gpt")
+        qwen = captioners["qwen"]
+        qwen_keys = {
+            "model_id",
+            "revision",
+            "prompt_file",
+            "dtype",
+            "max_new_tokens",
+            "do_sample",
+        }
+        if not isinstance(qwen, dict) or set(qwen) != qwen_keys:
+            raise ConfigError("captioners.qwen has the wrong fields")
+        _require_commit(qwen["revision"], "captioners.qwen.revision")
+        if qwen["do_sample"] is not False:
+            raise ConfigError("Phase 1 Qwen captioning must use deterministic decoding")
+        gpt = captioners["gpt"]
+        gpt_keys = {
+            "model_id",
+            "provider",
+            "base_url",
+            "api_key_env",
+            "prompt_file",
+            "temperature",
+            "max_output_tokens",
+            "image_detail",
+        }
+        if not isinstance(gpt, dict) or set(gpt) != gpt_keys:
+            raise ConfigError("captioners.gpt has the wrong fields")
+        if gpt["model_id"] != "openai/gpt-4.1-mini-2025-04-14":
+            raise ConfigError("GPT reference must pin openai/gpt-4.1-mini-2025-04-14")
+        if gpt["provider"] != "OpenAI" or float(gpt["temperature"]) != 0.0:
+            raise ConfigError("GPT reference must pin OpenAI and temperature zero")
+        if gpt["image_detail"] != "low":
+            raise ConfigError("GPT reference image_detail must equal low")
+        if Path(qwen["prompt_file"]) != Path(gpt["prompt_file"]):
+            raise ConfigError("Qwen and GPT must use the same free-form caption prompt")
+
+        extractor = _section(
+            data,
+            "extractor",
+            {
+                "model_id",
+                "revision",
+                "model_path",
+                "prompt_file",
+                "dtype",
+                "max_new_tokens",
+                "enable_thinking",
+                "calibration_file",
+                "calibration_min_answer_accuracy",
+                "max_error_rate",
+            },
+            {
+                "model_id",
+                "revision",
+                "model_path",
+                "prompt_file",
+                "dtype",
+                "max_new_tokens",
+                "enable_thinking",
+                "calibration_file",
+                "calibration_min_answer_accuracy",
+                "max_error_rate",
+            },
+        )
+        _require_commit(extractor["revision"], "extractor.revision")
+        if extractor["model_id"] != "google/gemma-4-26B-A4B-it":
+            raise ConfigError("Phase 1 extractor must pin google/gemma-4-26B-A4B-it")
+        if extractor["enable_thinking"] is not False:
+            raise ConfigError("Primary Gemma extractor must disable thinking")
+        if float(extractor["calibration_min_answer_accuracy"]) != 1.0:
+            raise ConfigError("Extractor calibration must require answer accuracy 1.0")
+        if not 0.0 <= float(extractor["max_error_rate"]) < 1.0:
+            raise ConfigError("extractor.max_error_rate must be in [0, 1)")
+
+        _section(
+            data,
+            "artifacts",
+            {"image_preflight", "gpt_descriptions", "gpt_usage", "gpt_cost"},
+            {"image_preflight", "gpt_descriptions", "gpt_usage", "gpt_cost"},
+        )
+        audit = _section(
+            data,
+            "audit",
+            {"bootstrap_samples"},
+            {"bootstrap_samples"},
+        )
+        if not isinstance(audit["bootstrap_samples"], int) or audit["bootstrap_samples"] <= 0:
+            raise ConfigError("audit.bootstrap_samples must be positive")
+        cost = _section(
+            data,
+            "cost",
+            {
+                "input_usd_per_million",
+                "output_usd_per_million",
+                "hard_cap_usd",
+                "reserve_per_request_usd",
+            },
+            {
+                "input_usd_per_million",
+                "output_usd_per_million",
+                "hard_cap_usd",
+                "reserve_per_request_usd",
+            },
+        )
+        if float(cost["hard_cap_usd"]) != 0.1:
+            raise ConfigError("GPT reference hard_cap_usd must equal 0.10")
+        if float(cost["reserve_per_request_usd"]) <= 0:
+            raise ConfigError("GPT reference reserve_per_request_usd must be positive")
     else:
+        prerequisites = _section(
+            data,
+            "prerequisites",
+            {
+                "phase0_reference_gate",
+                "phase1_qwen_caption_audit_rows",
+                "phase1_gpt_caption_audit_rows",
+                "bootstrap_samples",
+            },
+            {
+                "phase0_reference_gate",
+                "phase1_qwen_caption_audit_rows",
+                "phase1_gpt_caption_audit_rows",
+                "bootstrap_samples",
+            },
+        )
+        if not isinstance(prerequisites["bootstrap_samples"], int) or prerequisites[
+            "bootstrap_samples"
+        ] <= 0:
+            raise ConfigError("prerequisites.bootstrap_samples must be positive")
+
+        source = _section(
+            data,
+            "source_data",
+            {
+                "repo_id",
+                "revision",
+                "split",
+                "sample_size",
+                "train_ratio",
+                "object_id_column",
+                "survey_column",
+                "ra_column",
+                "dec_column",
+                "image_column",
+                "image_embedding_column",
+                "released_text_column",
+                "released_embedding_column",
+            },
+            {
+                "repo_id",
+                "revision",
+                "split",
+                "sample_size",
+                "train_ratio",
+                "object_id_column",
+                "survey_column",
+                "ra_column",
+                "dec_column",
+                "image_column",
+                "image_embedding_column",
+                "released_text_column",
+                "released_embedding_column",
+            },
+        )
+        _require_commit(source["revision"], "source_data.revision")
+        if source["sample_size"] != 1000:
+            raise ConfigError("Phase 2 source_data.sample_size must equal 1000")
+        if not 0.0 < float(source["train_ratio"]) < 1.0:
+            raise ConfigError("source_data.train_ratio must be between zero and one")
+
+        exclusions = _section(
+            data,
+            "exclusions",
+            {"radius_arcsec", "caption_screen_labels", "benchmark_coordinates"},
+            {"radius_arcsec", "caption_screen_labels", "benchmark_coordinates"},
+        )
+        if float(exclusions["radius_arcsec"]) <= 0:
+            raise ConfigError("exclusions.radius_arcsec must be positive")
+        if not isinstance(exclusions["benchmark_coordinates"], dict) or set(
+            exclusions["benchmark_coordinates"]
+        ) != {"gz_decals", "lens"}:
+            raise ConfigError("exclusions must name gz_decals and lens coordinate artifacts")
+
         captioning = _section(
             data,
             "captioning",
@@ -128,6 +354,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "dtype",
                 "max_new_tokens",
                 "do_sample",
+                "max_error_rate",
             },
             {
                 "model_id",
@@ -136,8 +363,15 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "dtype",
                 "max_new_tokens",
                 "do_sample",
+                "max_error_rate",
             },
         )
+        _require_commit(captioning["revision"], "captioning.revision")
+        if captioning["do_sample"] is not False:
+            raise ConfigError("Phase 2 captioning must use deterministic decoding")
+        if not 0.0 <= float(captioning["max_error_rate"]) < 1.0:
+            raise ConfigError("captioning.max_error_rate must be in [0, 1)")
+
         embedding = _section(
             data,
             "text_embedding",
@@ -146,6 +380,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "revision",
                 "dimension",
                 "normalize",
+                "normalization_atol",
                 "pooling",
                 "max_length",
                 "document_instruction",
@@ -156,31 +391,14 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "revision",
                 "dimension",
                 "normalize",
+                "normalization_atol",
                 "pooling",
                 "max_length",
                 "document_instruction",
                 "query_instruction",
             },
         )
-        released_text = _section(
-            data,
-            "released_text",
-            {"repo_id", "revision", "split", "object_id_column", "text_column", "batch_size"},
-            {"repo_id", "revision", "split", "object_id_column", "text_column", "batch_size"},
-        )
-        audit = _section(
-            data,
-            "caption_audit",
-            {"repo_id", "revision", "split", "output_dir", "bootstrap_samples"},
-            {"repo_id", "revision", "split", "output_dir", "bootstrap_samples"},
-        )
-        for section_name, section in (
-            ("captioning", captioning),
-            ("text_embedding", embedding),
-            ("released_text", released_text),
-            ("caption_audit", audit),
-        ):
-            _require_commit(section["revision"], f"{section_name}.revision")
+        _require_commit(embedding["revision"], "text_embedding.revision")
         if embedding["document_instruction"] not in {None, ""}:
             raise ConfigError("text_embedding.document_instruction must be empty")
         if embedding["query_instruction"] != queries["qwen_instruction"]:
@@ -189,10 +407,92 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             raise ConfigError("Qwen embeddings must be normalized 1024-dimensional vectors")
         if embedding["pooling"] != "last_token":
             raise ConfigError("text_embedding.pooling must be last_token")
-        if captioning["do_sample"] is not False:
-            raise ConfigError("Phase 1 caption screen must use deterministic decoding")
-        if not isinstance(released_text["batch_size"], int) or released_text["batch_size"] <= 0:
-            raise ConfigError("released_text.batch_size must be a positive integer")
+        if float(embedding["normalization_atol"]) != 1e-3:
+            raise ConfigError("text_embedding.normalization_atol must equal 0.001")
+
+        _section(
+            data,
+            "caches",
+            {"phase1_normalized_dir", "released_summary_qwen"},
+            {"phase1_normalized_dir", "released_summary_qwen"},
+        )
+        model = _section(
+            data,
+            "model",
+            {
+                "image_input_dim",
+                "embedding_dim",
+                "image_hidden_dim",
+                "text_hidden_dim",
+                "dropout",
+                "use_mean_embeddings",
+                "temperature_parameterization",
+                "temperature_initial_scale",
+                "temperature_max_scale",
+            },
+            {
+                "image_input_dim",
+                "embedding_dim",
+                "image_hidden_dim",
+                "text_hidden_dim",
+                "dropout",
+                "use_mean_embeddings",
+                "temperature_parameterization",
+                "temperature_initial_scale",
+                "temperature_max_scale",
+            },
+        )
+        if model["temperature_parameterization"] != "log":
+            raise ConfigError("model.temperature_parameterization must be log")
+        if abs(float(model["temperature_initial_scale"]) - 1.0 / 0.07) > 1e-12:
+            raise ConfigError("model.temperature_initial_scale must equal 1/0.07")
+        if float(model["temperature_max_scale"]) != 100.0:
+            raise ConfigError("model.temperature_max_scale must equal 100")
+        if model["use_mean_embeddings"] is not True:
+            raise ConfigError("Phase 2 uses mean AION embeddings")
+
+        training = _section(
+            data,
+            "training",
+            {
+                "batch_size",
+                "epochs",
+                "learning_rate",
+                "weight_decay",
+                "gradient_clip_max_norm",
+                "num_workers",
+                "checkpoint_metric",
+                "minimum_steps_per_epoch",
+            },
+            {
+                "batch_size",
+                "epochs",
+                "learning_rate",
+                "weight_decay",
+                "gradient_clip_max_norm",
+                "num_workers",
+                "checkpoint_metric",
+                "minimum_steps_per_epoch",
+            },
+        )
+        if training["checkpoint_metric"] != "caption_to_image_recall_at_10":
+            raise ConfigError("training checkpoint metric must be caption_to_image_recall_at_10")
+        estimated_train_rows = int(source["sample_size"] * float(source["train_ratio"]))
+        estimated_steps = (estimated_train_rows + int(training["batch_size"]) - 1) // int(
+            training["batch_size"]
+        )
+        if estimated_steps < int(training["minimum_steps_per_epoch"]):
+            raise ConfigError("training batch_size yields too few optimizer steps per epoch")
+
+        conditions = data["conditions"]
+        if not isinstance(conditions, list) or len(conditions) != 3:
+            raise ConfigError("Phase 2 requires exactly three conditions")
+        names = {condition.get("name") for condition in conditions if isinstance(condition, dict)}
+        if names != {"R-OAI", "R-QWEN", "Q-QWEN"}:
+            raise ConfigError("Phase 2 conditions must be R-OAI, R-QWEN, and Q-QWEN")
+        for condition in conditions:
+            if set(condition) != {"name", "text_source", "text_input_dim"}:
+                raise ConfigError(f"Condition {condition.get('name')} has the wrong fields")
 
     return dict(data)
 

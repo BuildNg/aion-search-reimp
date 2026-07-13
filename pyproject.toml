@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cluster = [
+  "accelerate>=1.14",
   "datasets>=2.19",
   "huggingface-hub>=0.24",
   "openai>=1.30",

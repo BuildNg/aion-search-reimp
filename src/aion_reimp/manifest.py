@@ -81,6 +81,107 @@ def coordinate_exclusion_table(
     return grouped
 
 
+def coordinate_exclusion_coverage(
+    source: pd.DataFrame,
+    benchmark_coordinates: Mapping[str, pd.DataFrame],
+    radius_arcsec: float = 1.0,
+) -> pd.DataFrame:
+    """Record a matched source object or explicit absence for every benchmark row."""
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    def unit_vectors(frame: pd.DataFrame) -> np.ndarray:
+        ra = np.deg2rad(frame["ra"].to_numpy(dtype=float))
+        dec = np.deg2rad(frame["dec"].to_numpy(dtype=float))
+        cos_dec = np.cos(dec)
+        return np.column_stack((cos_dec * np.cos(ra), cos_dec * np.sin(ra), np.sin(dec)))
+
+    if {"object_id", "ra", "dec"} - set(source.columns):
+        raise ValueError("Source coordinate table requires object_id, ra, and dec")
+    if source.empty:
+        raise ValueError("Source coordinate table is empty")
+    if radius_arcsec <= 0:
+        raise ValueError("radius_arcsec must be positive")
+
+    source_tree = cKDTree(unit_vectors(source))
+    source_ids = source["object_id"].astype(str).to_numpy()
+    records: List[Dict[str, object]] = []
+    for name, benchmark in benchmark_coordinates.items():
+        if {"ra", "dec"} - set(benchmark.columns):
+            raise ValueError(f"Benchmark {name} requires ra and dec")
+        if benchmark.empty:
+            continue
+        chord_distance, source_indices = source_tree.query(unit_vectors(benchmark), k=1)
+        angular_radians = 2.0 * np.arcsin(np.clip(chord_distance / 2.0, 0.0, 1.0))
+        separations = np.rad2deg(angular_radians) * 3600.0
+        benchmark_ids = (
+            benchmark["benchmark_row"].astype(str).to_numpy()
+            if "benchmark_row" in benchmark.columns
+            else np.arange(len(benchmark)).astype(str)
+        )
+        for benchmark_id, source_index, separation in zip(
+            benchmark_ids, source_indices, separations
+        ):
+            matched = bool(separation <= radius_arcsec)
+            records.append(
+                {
+                    "exclusion_set": str(name),
+                    "exclusion_id": str(benchmark_id),
+                    "status": "matched" if matched else "absent",
+                    "source_object_id": source_ids[source_index] if matched else "",
+                    "separation_arcsec": float(separation),
+                }
+            )
+    return pd.DataFrame(records)
+
+
+def exact_exclusion_coverage(
+    source_object_ids: Iterable[str],
+    exclusion_set: str,
+    exclusion_object_ids: Iterable[str],
+) -> pd.DataFrame:
+    """Record exact-ID exclusion matches and explicit absences."""
+    source_ids = {str(value) for value in source_object_ids}
+    records = []
+    seen = set()
+    for value in exclusion_object_ids:
+        object_id = str(value)
+        if object_id in seen:
+            raise ValueError(f"Duplicate exclusion ID in {exclusion_set}: {object_id}")
+        seen.add(object_id)
+        matched = object_id in source_ids
+        records.append(
+            {
+                "exclusion_set": str(exclusion_set),
+                "exclusion_id": object_id,
+                "status": "matched" if matched else "absent",
+                "source_object_id": object_id if matched else "",
+                "separation_arcsec": 0.0 if matched else float("nan"),
+            }
+        )
+    return pd.DataFrame(records)
+
+
+def assert_exclusion_coverage(coverage: pd.DataFrame, expected_rows: int) -> None:
+    required = {"exclusion_set", "exclusion_id", "status", "source_object_id"}
+    missing = required - set(coverage.columns)
+    if missing:
+        raise ValueError(f"Exclusion coverage missing columns: {sorted(missing)}")
+    if len(coverage) != expected_rows:
+        raise AssertionError(
+            f"Exclusion coverage expected {expected_rows} rows, found {len(coverage)}"
+        )
+    invalid = set(coverage["status"].astype(str)) - {"matched", "absent"}
+    if invalid:
+        raise AssertionError(f"Invalid exclusion coverage states: {sorted(invalid)}")
+    matched_without_source = coverage[
+        coverage["status"].eq("matched")
+        & coverage["source_object_id"].fillna("").astype(str).eq("")
+    ]
+    if not matched_without_source.empty:
+        raise AssertionError("Matched exclusions must name a source object")
+
+
 def assert_no_benchmark_leakage(frame: pd.DataFrame) -> None:
     required = {"object_id", "split", "benchmark_exclusion"}
     missing = required - set(frame.columns)

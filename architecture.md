@@ -36,8 +36,9 @@ Only current runnable configs and launch helpers remain live. A completed run pr
 | `config.py` | strict schema, defaults, cross-field validation, resolved config | model calls, training loops |
 | `manifest.py` | stable object IDs, benchmark exclusions, SHA-256 split, common-row selection, fingerprints | captioning, embeddings, optimization |
 | `datasets.py` | loading manifest-selected image/text vectors and batches | split derivation, metric policy |
-| `captioning.py` | Qwen3-VL messages, preprocessing, deterministic generation, schema parsing | dataset joins, audit scoring |
-| `caption_audit.py` | join 64-image structured outputs to human labels, call metric helpers, write row-level and aggregate audit artifacts | caption generation, retrieval evaluation |
+| `captioning.py` | matched free-form Qwen3-VL and pinned OpenRouter GPT description generation | morphology extraction, dataset joins, audit scoring |
+| `morphology.py` | text-only Gemma 4 Galaxy Zoo extraction, evidence validation, synthetic calibration | image access, caption generation, audit scoring |
+| `caption_audit.py` | join extracted answers to the 64 human decision paths and write row-level and aggregate audit artifacts | caption generation, extraction, retrieval evaluation |
 | `text_embeddings.py` | Qwen document/query encoding, instruction asymmetry, normalization, cache keys | captions, projection training |
 | `cache.py` | released-embedding ingestion, versioned object-keyed reads/writes, completeness checks | model policy, scientific selection |
 | `reference.py` | load pinned released config/safetensors into `model.py`, state mapping, output-equivalence fixture | training, metric definitions |
@@ -78,7 +79,9 @@ released summaries
 
 `manifest.py` is the only place that defines membership or splits. Downstream commands select rows from a manifest but never recompute identity, exclusions, or split assignment.
 
-Every cache row contains `object_id` and provenance sufficient to reject stale reuse: model ID and revision, prompt or instruction hash, preprocessing version, output dimension, and source checksum. Cache completion is checked against the input manifest fingerprint.
+Every cache row contains `object_id` and provenance sufficient to reject stale reuse: model ID and revision, prompt or instruction hash, preprocessing version, output dimension, source checksum, and a checksum of the float32 vector payload. Cache completion is checked against the input manifest fingerprint. Derived caches are new artifacts whose metadata names the source fingerprint and transform; released artifacts are never mutated in place.
+
+Embedding-cache validation remeasures every vector norm under the config's normalization policy and rejects both out-of-tolerance vectors and stored flags that contradict measurement. Qwen normalization occurs after conversion to float32. Released OpenAI vectors remain verbatim and pass the same `atol=1e-3` policy without renormalization.
 
 Manifest construction asserts that exclusion IDs have empty intersection with train or validation IDs. Document-cache validation rejects any row whose provenance records a non-empty query instruction; these invariants have direct tests.
 
@@ -87,10 +90,18 @@ At real-manifest construction in Phase 2, the run seed must be passed from confi
 The caption audit is a separate bounded pipeline:
 
 ```text
-64-image labels + captioning.py structured outputs
-  -> caption_audit.py -> metrics.py helpers
+same 64 images + same paper free-form prompt
+  -> Qwen3-VL-8B descriptions
+  -> GPT-4.1-mini descriptions
+  -> same text-only Gemma 4 26B A4B extractor
+       copied evidence span or not-stated
+  -> caption_audit.py
   -> caption_audit_rows.csv + caption_audit_metrics.json
 ```
+
+The closed reference is `openai/gpt-4.1-mini-2025-04-14`, called locally through OpenRouter with the OpenAI provider pinned and no fallback. GPT and Qwen receive the same 64 images and the same free-form prompt from the released paper pipeline. `google/gemma-4-26B-A4B-it` at revision `5305c1e...` then receives description text only. Every supported extracted answer must cite a verbatim span in that description; absent information becomes `not-stated`. A small synthetic mapping set must reach 100% answer accuracy before the 64-object extraction starts.
+
+The 300-word prompt limit is a hard captioner-compliance gate, counted by whitespace-delimited words after trimming. A response above 300 is preserved in the error artifact, receives no automatic retry, and invalidates that model's primary matched morphology readout. The preregistered recovery is a secondary analysis that truncates the original response to its first 300 words without another model call. GPT-4.1 Mini triggered this rule on the second attempted object (304 words), so the deterministic fallback is active and all GPT morphology results are labelled secondary.
 
 ## Training pipeline
 
@@ -137,7 +148,7 @@ selected model + frozen benchmark + locked query file
 
 Canonical paper queries and preregistered paraphrases are separate outputs. Before results are read, the complete R-OAI query set is embedded once with `text-embedding-3-large` and preserved with response metadata; open conditions embed the same strings locally with the frozen query instruction.
 
-The R-OAI query freeze is the only local closed-API operation. It uses `OPEN_ROUTER_KEY` from the private research `.env`, pins the OpenAI provider without fallback, and writes no secret to artifacts. Only the resulting Parquet and metadata sidecar move to GitHub or THQL. The released checkpoint gate reproduces the paper's full-set canonical-query AION-Search row: spiral 0.941, merger 0.554, and lens 0.173 nDCG@10, plus exactly two confirmed lenses in the top 10; the re-ranked row is out of scope.
+The only local closed-API operations are the one-time R-OAI query freeze and the bounded 64-image GPT-4.1-mini free-form reference. Both use `OPEN_ROUTER_KEY` from the private research `.env`, pin the OpenAI provider without fallback, and write no secret to artifacts. The GPT run records per-object usage and enforces a hard $0.10 budget. Only frozen GPT descriptions move to THQL; the key never does. The released checkpoint gate reproduces the paper's full-set canonical-query AION-Search row: spiral 0.941, merger 0.554, and lens 0.173 nDCG@10, plus exactly two confirmed lenses in the top 10; the re-ranked row is out of scope.
 
 ## Config boundary
 
@@ -173,16 +184,20 @@ Each run writes `results/<run_id>/`:
 | `tables.csv` | compact report-ready results |
 | `errors.jsonl` | structured failures or skipped rows, if any |
 
-Caption and text-embedding generation are dataset-cache jobs rather than training runs. They follow the same resolved-config, input-fingerprint, status, error-log, and completeness conventions. The 64-image audit additionally writes `caption_audit_rows.csv` and `caption_audit_metrics.json`.
+Caption and text-embedding generation are dataset-cache jobs rather than training runs. They follow the same resolved-config, input-fingerprint, status, error-log, and completeness conventions. Phase 1 writes both free-form description caches, both evidence-bearing extraction caches, the extractor calibration result, matched row-level audits, aggregate metrics, and one direct comparison. The comparison includes a paired object-cluster bootstrap confidence interval for GPT-minus-Qwen accuracy, computed from the two row-level audits without another model call. Local GPT preparation additionally writes image-dimension preflight, per-request usage, and cost artifacts.
 
 The 64-image screen may fail fast on invalid structured output. Before captioning beyond that screen, generation must instead preserve every unparseable response in `errors.jsonl` with object ID and error context so a long cache job remains auditable.
+
+The 1k smoke uses a capped log-and-skip caption path. Failed rows are recorded once, resume treats successes and errors as attempted, and every training condition is reduced to the same successful-object manifest. Its prerequisite contract carries the Phase 0 reference scores and the matched Qwen/GPT Phase 1 diagnostic accuracy/abstention intervals. Only a failed Phase 0 reproducibility gate blocks this engineering smoke; caption-screen performance is evidence to interpret, not a manual launch veto.
 
 Comparisons are valid only when common-set, split, benchmark, and query fingerprints match. Headline values must be regenerable from `ranked_rows.parquet`; `metrics.json` alone is not primary evidence.
 
 ## Compute boundary
 
-- Local machine: tests, tiny CPU fixtures, manifest inspection, config validation, and pulled-result analysis.
+- Local machine: tests, tiny CPU fixtures, manifest inspection, config validation, pulled-result analysis, the one-time query freeze, and the bounded 64-image GPT reference.
+- Laptop safety is a hard boundary: never load or transform full embedding caches locally and never run full vector-payload checksum passes locally. The eGPU may be used without separate approval for bounded GPU work, but it does not relax host RAM/CPU limits. Large cache derivation and manifest-scale data work belongs on THQL after explicit run approval.
 - `a100_thql`: primary caption generation, embedding, and training under `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/AION-Search` using the uv environment `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/envs/astrobridge` (Python 3.11, PyTorch 2.5.1+cu121).
+- Gemma weights live outside the checkout at `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/models/gemma-4-26B-A4B-it`. The local staging copy is transfer-only: it is never instantiated on the laptop and may be removed after the remote copy is verified.
 - Reuse `/data2/cmdir/home/ioit_thql/.cache/huggingface`; the pinned Qwen3-VL-8B-Instruct snapshot is already complete there. Do not create a project-local duplicate cache.
 - `a100_fusion` (`ioit_111`): backup only when THQL is occupied or an approved parallel run is needed.
 - Cluster scripts submit through the existing `run_via_slurm` and `script` pattern. Resource lines stay unchanged; experiment choice comes from the entrypoint and config.
@@ -190,7 +205,7 @@ Comparisons are valid only when common-set, split, benchmark, and query fingerpr
 
 No GPU job or model/data download starts without approval and an ETA. Every launch report records synced files, job ID, node/GPU, state, log path, output path, and the question the run answers.
 
-When the user asks to stop for review, implementation ends after local code and tests but before GitHub push, cluster sync, or cluster execution. The local R-OAI query freeze is allowed only when explicitly requested because it requires neither GPU nor shared cluster data.
+When the user asks to stop for review, implementation ends after local code and tests but before GitHub push, cluster sync, or cluster execution. A local closed-API audit or query freeze still requires explicit approval even though it uses neither GPU nor shared cluster data.
 
 ## Decisions that remain stable
 

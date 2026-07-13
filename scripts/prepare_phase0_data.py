@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 from datasets import load_dataset
 
-from aion_reimp.cache import ingest_released_embeddings, write_embedding_cache
+from aion_reimp.cache import (
+    NormalizationPolicy,
+    ingest_released_embeddings,
+    write_embedding_cache,
+)
 from aion_reimp.config import load_config
 from aion_reimp.datasets import materialize_benchmark_coordinates, materialize_caption_screen
 from aion_reimp.manifest import build_manifest, coordinate_exclusion_table, write_manifest
@@ -16,7 +20,7 @@ from aion_reimp.manifest import build_manifest, coordinate_exclusion_table, writ
 
 def main() -> None:
     phase0 = load_config(Path("configs/phase0_reference.yaml"))
-    phase1 = load_config(Path("configs/phase1_open_text.yaml"))
+    phase1 = load_config(Path("configs/phase1.yaml"))
     output_dir = Path("data/phase0")
     output_dir.mkdir(parents=True, exist_ok=False)
 
@@ -33,8 +37,8 @@ def main() -> None:
     source_coordinates["source_row_id"] = np.arange(len(source_coordinates), dtype=np.int64)
     source_coordinates.to_parquet(output_dir / "source_coordinates.parquet", index=False)
 
-    audit = phase1["caption_audit"]
-    screen_dir = Path(audit["output_dir"])
+    audit = phase1["benchmark"]
+    screen_dir = Path(audit["input_dir"])
     labels_path = screen_dir / "caption_screen_labels.parquet"
     if not labels_path.exists():
         materialize_caption_screen(audit["repo_id"], audit["revision"], audit["split"], screen_dir)
@@ -63,10 +67,12 @@ def main() -> None:
     )
     write_manifest(manifest, output_dir / "object_manifest.parquet")
 
-    released_cache = ingest_released_embeddings(source)
+    policy = NormalizationPolicy(required=True, atol=1e-3)
+    released_cache = ingest_released_embeddings(source, normalization_policy=policy)
     write_embedding_cache(
         released_cache,
         output_dir / "released_summary_openai_embeddings.parquet",
+        normalization_policy=policy,
         metadata={
             "source_repo": training["repo_id"],
             "source_revision": training["revision"],

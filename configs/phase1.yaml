@@ -1,0 +1,63 @@
+schema_version: 1
+kind: phase1
+
+run:
+  id: phase1_v1
+  output_root: results
+  seed: 20260713
+
+benchmark:
+  repo_id: astronolan/galaxy-description-benchmark
+  revision: ebb13986d04b6b5e47529fb1fc68761839bffd75
+  split: train
+  input_dir: data/caption_screen_64
+
+caption_policy:
+  max_words: 300
+  exceedance: hard_compliance_failure
+  fallback: truncate_original_to_300_words_secondary_only_if_triggered
+
+captioners:
+  qwen:
+    model_id: Qwen/Qwen3-VL-8B-Instruct
+    revision: 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b
+    prompt_file: data/prompts/phase1_freeform_caption_v1.txt
+    dtype: bfloat16
+    max_new_tokens: 1024
+    do_sample: false
+  gpt:
+    model_id: openai/gpt-4.1-mini-2025-04-14
+    provider: OpenAI
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPEN_ROUTER_KEY
+    prompt_file: data/prompts/phase1_freeform_caption_v1.txt
+    temperature: 0.0
+    max_output_tokens: 1024
+    image_detail: low
+
+extractor:
+  model_id: google/gemma-4-26B-A4B-it
+  revision: 5305c1e72ea29c01f31a81230d52b375ba88b409
+  model_path: /data2/cmdir/home/ioit_thql/trung_ng/astrobridge/models/gemma-4-26B-A4B-it
+  prompt_file: data/prompts/phase1_gemma_extractor_v1.txt
+  dtype: bfloat16
+  max_new_tokens: 1536
+  enable_thinking: false
+  calibration_file: data/phase1/gemma_extractor_calibration_v1.jsonl
+  calibration_min_answer_accuracy: 1.0
+  max_error_rate: 0.0
+
+artifacts:
+  image_preflight: data/phase1/caption_screen_64_image_preflight_v1.json
+  gpt_descriptions: data/phase1/gpt41mini_freeform_64_v1.jsonl
+  gpt_usage: data/phase1/gpt41mini_freeform_64_usage_v1.jsonl
+  gpt_cost: data/phase1/gpt41mini_freeform_64_cost_v1.json
+
+cost:
+  input_usd_per_million: 0.40
+  output_usd_per_million: 1.60
+  hard_cap_usd: 0.10
+  reserve_per_request_usd: 0.002
+
+audit:
+  bootstrap_samples: 2000

@@ -3,11 +3,15 @@ import pytest
 
 from aion_reimp.manifest import (
     assert_no_benchmark_leakage,
+    assert_exclusion_coverage,
     build_manifest,
+    coordinate_exclusion_coverage,
     coordinate_exclusion_table,
+    exact_exclusion_coverage,
     manifest_fingerprint,
     split_fraction,
 )
+from aion_reimp.smoke import select_smoke_rows
 
 
 def _source() -> pd.DataFrame:
@@ -57,3 +61,32 @@ def test_coordinate_exclusions_use_angular_radius() -> None:
     matches = coordinate_exclusion_table(source, {"caption_or_retrieval": benchmark}, radius_arcsec=1.0)
     assert matches["object_id"].tolist() == ["b"]
     assert matches.loc[0, "separation_arcsec"] < 1.0
+
+
+def test_exclusion_coverage_names_matches_and_absences() -> None:
+    benchmark = pd.DataFrame(
+        {
+            "benchmark_row": [10, 11],
+            "ra": [2.0 + 0.5 / 3600.0, 100.0],
+            "dec": [-2.0, 20.0],
+        }
+    )
+    coordinate = coordinate_exclusion_coverage(
+        _source(), {"retrieval": benchmark}, radius_arcsec=1.0
+    )
+    exact = exact_exclusion_coverage(_source()["object_id"], "caption_screen_64", ["a", "z"])
+    coverage = pd.concat([coordinate, exact], ignore_index=True)
+    assert_exclusion_coverage(coverage, expected_rows=4)
+    assert coverage["status"].tolist() == ["matched", "absent", "matched", "absent"]
+    assert coordinate.loc[0, "source_object_id"] == "b"
+
+
+def test_smoke_selection_is_seeded_and_excludes_benchmarks() -> None:
+    source = pd.concat([_source()] * 300, ignore_index=True)
+    source["object_id"] = [f"object-{index}" for index in range(len(source))]
+    source["source_row_id"] = range(len(source))
+    manifest = build_manifest(source, {"benchmark": ["object-7"]}, seed=9)
+    first = select_smoke_rows(manifest, sample_size=1000, seed=9)
+    second = select_smoke_rows(manifest.sample(frac=1.0, random_state=2), 1000, seed=9)
+    assert first["object_id"].tolist() == second["object_id"].tolist()
+    assert "object-7" not in set(first["object_id"])

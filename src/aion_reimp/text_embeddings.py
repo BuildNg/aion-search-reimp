@@ -10,7 +10,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from .cache import sha256_text, validate_embedding_cache
+from .cache import NormalizationPolicy, sha256_text, validate_embedding_cache
 
 
 def format_query(text: str, instruction: str) -> str:
@@ -36,6 +36,10 @@ class EmbeddingSpec:
     normalize: bool = True
     max_length: int = 8192
     query_instruction: str = ""
+
+    @property
+    def normalization_policy(self) -> NormalizationPolicy:
+        return NormalizationPolicy(required=self.normalize, atol=1e-3)
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "EmbeddingSpec":
@@ -84,10 +88,12 @@ class QwenEmbedder:
         tokens = {key: value.to(self.model.device) for key, value in tokens.items()}
         with torch.inference_mode():
             outputs = self.model(**tokens)
-            embeddings = last_token_pool(outputs.last_hidden_state, tokens["attention_mask"])
+            embeddings = last_token_pool(
+                outputs.last_hidden_state, tokens["attention_mask"]
+            ).float()
             if self.spec.normalize:
                 embeddings = F.normalize(embeddings, p=2, dim=1)
-        embeddings = embeddings.float().cpu().numpy()
+        embeddings = embeddings.cpu().numpy()
         if embeddings.shape[1] != self.spec.dimension:
             raise ValueError(
                 f"Expected {self.spec.dimension} embedding dimensions, got {embeddings.shape[1]}"
@@ -120,9 +126,16 @@ def embedding_frame(
                 "instruction_hash": sha256_text(instruction),
                 "source_checksum": sha256_text(str(text)),
                 "output_dim": int(array.size),
-                "normalized": bool(np.isclose(np.linalg.norm(array), 1.0, atol=1e-3)),
+                "normalized": bool(
+                    np.isclose(
+                        np.linalg.norm(array),
+                        1.0,
+                        atol=spec.normalization_policy.atol,
+                        rtol=0.0,
+                    )
+                ),
             }
         )
     frame = pd.DataFrame(records)
-    validate_embedding_cache(frame)
+    validate_embedding_cache(frame, spec.normalization_policy)
     return frame

@@ -1,0 +1,10 @@
+{
+  "all_at_most_512_px": true,
+  "dimension_counts": {
+    "160x160": 64
+  },
+  "images": 64,
+  "max_height": 160,
+  "max_width": 160,
+  "over_limit": []
+}

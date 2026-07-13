@@ -1,4 +1,4 @@
-"""Direct 64-image structured-answer audit against human decision paths."""
+"""Score text-extracted Galaxy Zoo answers against human decision paths."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def audit_rows(captions: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
                     "gold": answer,
                     "prediction": prediction,
                     "correct": bool(prediction == answer),
-                    "abstained": bool(prediction == "uncertain"),
+                    "abstained": bool(prediction == "not-stated"),
                 }
             )
     return pd.DataFrame(records)
@@ -60,6 +60,7 @@ def _cluster_bootstrap_interval(
     rows: pd.DataFrame,
     samples: int,
     seed: int,
+    value_column: str = "correct",
 ) -> Tuple[float, float]:
     object_ids = rows["object_id"].drop_duplicates().to_numpy()
     rng = np.random.default_rng(seed)
@@ -67,7 +68,9 @@ def _cluster_bootstrap_interval(
     grouped = {object_id: group for object_id, group in rows.groupby("object_id")}
     for _ in range(samples):
         draw = rng.choice(object_ids, size=len(object_ids), replace=True)
-        values = np.concatenate([grouped[object_id]["correct"].to_numpy(dtype=float) for object_id in draw])
+        values = np.concatenate(
+            [grouped[object_id][value_column].to_numpy(dtype=float) for object_id in draw]
+        )
         means.append(float(values.mean()))
     return (float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975)))
 
@@ -76,23 +79,81 @@ def audit_metrics(rows: pd.DataFrame, bootstrap_samples: int = 2000, seed: int =
     if rows.empty:
         raise ValueError("Caption audit has no scored rows")
     low, high = _cluster_bootstrap_interval(rows, bootstrap_samples, seed)
+    abstention_low, abstention_high = _cluster_bootstrap_interval(
+        rows, bootstrap_samples, seed, value_column="abstained"
+    )
     result: Dict[str, Any] = {
         "objects": int(rows["object_id"].nunique()),
         "answers": int(len(rows)),
         "accuracy": float(rows["correct"].mean()),
         "accuracy_ci95": [low, high],
         "abstention_rate": float(rows["abstained"].mean()),
+        "abstention_ci95": [abstention_low, abstention_high],
         "by_question": {},
     }
     for question, group in rows.groupby("question", sort=True):
         q_low, q_high = _cluster_bootstrap_interval(group, bootstrap_samples, seed)
+        q_abstention_low, q_abstention_high = _cluster_bootstrap_interval(
+            group, bootstrap_samples, seed, value_column="abstained"
+        )
         result["by_question"][question] = {
             "answers": int(len(group)),
             "accuracy": float(group["correct"].mean()),
             "accuracy_ci95": [q_low, q_high],
             "abstention_rate": float(group["abstained"].mean()),
+            "abstention_ci95": [q_abstention_low, q_abstention_high],
         }
     return result
+
+
+def paired_accuracy_delta(
+    qwen_rows: pd.DataFrame,
+    gpt_rows: pd.DataFrame,
+    bootstrap_samples: int = 2000,
+    seed: int = 0,
+) -> Dict[str, Any]:
+    """Paired object-cluster bootstrap for GPT-minus-Qwen answer accuracy."""
+    keys = ["object_id", "question"]
+    required = set(keys) | {"gold", "correct"}
+    for name, rows in (("qwen", qwen_rows), ("gpt", gpt_rows)):
+        missing = required - set(rows.columns)
+        if missing:
+            raise ValueError(f"{name} audit rows missing columns: {sorted(missing)}")
+        if rows.duplicated(keys).any():
+            raise ValueError(f"{name} audit rows contain duplicate object-question pairs")
+    paired = qwen_rows.loc[:, keys + ["gold", "correct"]].merge(
+        gpt_rows.loc[:, keys + ["gold", "correct"]],
+        on=keys,
+        how="outer",
+        validate="one_to_one",
+        suffixes=("_qwen", "_gpt"),
+        indicator=True,
+    )
+    if not paired["_merge"].eq("both").all():
+        raise ValueError("Qwen and GPT audits do not contain identical object-question pairs")
+    if not paired["gold_qwen"].eq(paired["gold_gpt"]).all():
+        raise ValueError("Qwen and GPT audit rows disagree on human labels")
+    paired["delta"] = (
+        paired["correct_gpt"].astype(float) - paired["correct_qwen"].astype(float)
+    )
+    object_ids = paired["object_id"].drop_duplicates().to_numpy()
+    grouped = {
+        object_id: group["delta"].to_numpy(dtype=float)
+        for object_id, group in paired.groupby("object_id")
+    }
+    rng = np.random.default_rng(seed)
+    draws = []
+    for _ in range(bootstrap_samples):
+        sampled = rng.choice(object_ids, size=len(object_ids), replace=True)
+        draws.append(float(np.concatenate([grouped[value] for value in sampled]).mean()))
+    return {
+        "point": float(paired["delta"].mean()),
+        "ci95": [float(np.quantile(draws, 0.025)), float(np.quantile(draws, 0.975))],
+        "objects": int(len(object_ids)),
+        "answers": int(len(paired)),
+        "bootstrap_samples": int(bootstrap_samples),
+        "seed": int(seed),
+    }
 
 
 def write_audit(

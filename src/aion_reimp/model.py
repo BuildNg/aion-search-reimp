@@ -88,9 +88,17 @@ class ResidualProjector(nn.Module):
 
 
 class AIONSearchModel(nn.Module):
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(
+        self,
+        config: ModelConfig,
+        temperature_initial_scale: float = 1.0 / 0.07,
+        temperature_max_scale: float = 100.0,
+    ) -> None:
         super().__init__()
+        if temperature_initial_scale <= 0 or temperature_max_scale <= 0:
+            raise ValueError("Temperature scales must be positive")
         self.config = config
+        self.temperature_max_scale = float(temperature_max_scale)
         self.image_projector = ResidualProjector(
             config.image_input_dim,
             config.image_hidden_dim,
@@ -105,12 +113,14 @@ class AIONSearchModel(nn.Module):
             config.dropout,
             normalize_input=False,
         )
-        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1.0 / 0.07, dtype=torch.float32)))
+        self.logit_scale = nn.Parameter(
+            torch.log(torch.tensor(float(temperature_initial_scale), dtype=torch.float32))
+        )
 
     def forward(self, batch: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         image_features = self.image_projector(batch["image_embedding"])
         text_features = self.text_projector(batch["text_embedding"])
-        logit_scale = self.logit_scale.exp().clamp(max=100)
+        logit_scale = self.logit_scale.exp().clamp(max=self.temperature_max_scale)
         logits_per_image = logit_scale * image_features @ text_features.T
         return {
             "image_features": image_features,

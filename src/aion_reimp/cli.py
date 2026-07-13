@@ -9,7 +9,7 @@ from typing import Dict, List
 
 import pandas as pd
 
-from .cache import ingest_released_embeddings, write_embedding_cache
+from .cache import NormalizationPolicy, ingest_released_embeddings, write_embedding_cache
 from .caption_audit import write_audit
 from .captioning import QwenCaptioner, append_caption_results
 from .config import load_config
@@ -67,8 +67,14 @@ def _cmd_coordinate_exclusions(args: argparse.Namespace) -> None:
 
 def _cmd_ingest_released(args: argparse.Namespace) -> None:
     source = _read_table(args.input)
-    frame = ingest_released_embeddings(source)
-    fingerprint = write_embedding_cache(frame, args.output, overwrite=args.overwrite)
+    policy = NormalizationPolicy(required=True, atol=1e-3)
+    frame = ingest_released_embeddings(source, normalization_policy=policy)
+    fingerprint = write_embedding_cache(
+        frame,
+        args.output,
+        normalization_policy=policy,
+        overwrite=args.overwrite,
+    )
     print(f"cache_rows={len(frame)} fingerprint={fingerprint}")
 
 
@@ -169,7 +175,12 @@ def _cmd_embed(args: argparse.Namespace) -> None:
         args.role,
         spec,
     )
-    write_embedding_cache(frame, args.output, overwrite=args.overwrite)
+    write_embedding_cache(
+        frame,
+        args.output,
+        normalization_policy=spec.normalization_policy,
+        overwrite=args.overwrite,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

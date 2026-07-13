@@ -1,0 +1,97 @@
+schema_version: 1
+kind: phase2_smoke
+
+run:
+  id: phase2_smoke_v1
+  output_root: results
+  seed: 20260712
+
+queries:
+  file: data/queries/retrieval_queries_v1.yaml
+  openai_model: text-embedding-3-large
+  openai_cache: data/cache/query_embeddings/r_oai_queries_v1.parquet
+  qwen_instruction: Given an astronomical search query, retrieve galaxy descriptions whose observable properties match the query.
+
+prerequisites:
+  phase0_reference_gate: results/phase0_reference_v2/released_evaluation/reference_gate.json
+  phase1_qwen_caption_audit_rows: results/phase1_v1/qwen3vl_8b_audit/caption_audit_rows.csv
+  phase1_gpt_caption_audit_rows: results/phase1_v1/gpt41mini_audit/caption_audit_rows.csv
+  bootstrap_samples: 2000
+
+source_data:
+  repo_id: astronolan/galaxy-descriptions
+  revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
+  split: default
+  sample_size: 1000
+  train_ratio: 0.8
+  object_id_column: object_id
+  survey_column: survey
+  ra_column: ra
+  dec_column: dec
+  image_column: image
+  image_embedding_column: aion_mean_embedding
+  released_text_column: summary
+  released_embedding_column: summary_text_embedding
+
+exclusions:
+  radius_arcsec: 1.0
+  caption_screen_labels: data/caption_screen_64/caption_screen_labels.parquet
+  benchmark_coordinates:
+    gz_decals: results/phase0_reference_v2/benchmark_coordinates/gz_decals_coordinates.parquet
+    lens: results/phase0_reference_v2/benchmark_coordinates/lens_coordinates.parquet
+
+captioning:
+  model_id: Qwen/Qwen3-VL-8B-Instruct
+  revision: 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b
+  prompt_file: data/prompts/qwen_retrieval_summary_v1.txt
+  dtype: bfloat16
+  max_new_tokens: 512
+  do_sample: false
+  max_error_rate: 0.02
+
+text_embedding:
+  model_id: Qwen/Qwen3-Embedding-0.6B
+  revision: 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
+  dimension: 1024
+  normalize: true
+  normalization_atol: 0.001
+  pooling: last_token
+  max_length: 8192
+  document_instruction: null
+  query_instruction: Given an astronomical search query, retrieve galaxy descriptions whose observable properties match the query.
+
+caches:
+  phase1_normalized_dir: data/cache/qwen_embeddings/fp32_normalized_v1
+  released_summary_qwen: released_summary_qwen_embeddings.parquet
+
+model:
+  image_input_dim: 768
+  embedding_dim: 1024
+  image_hidden_dim: 768
+  text_hidden_dim: 1024
+  dropout: 0.1
+  use_mean_embeddings: true
+  temperature_parameterization: log
+  temperature_initial_scale: 14.285714285714286
+  temperature_max_scale: 100.0
+
+training:
+  batch_size: 128
+  epochs: 20
+  learning_rate: 0.0001
+  weight_decay: 0.05
+  gradient_clip_max_norm: 1.0
+  num_workers: 4
+  checkpoint_metric: caption_to_image_recall_at_10
+  minimum_steps_per_epoch: 4
+
+conditions:
+  - name: R-OAI
+    text_source: released_summary_openai
+    text_input_dim: 3072
+  - name: R-QWEN
+    text_source: released_summary_qwen
+    text_input_dim: 1024
+  - name: Q-QWEN
+    text_source: qwen_caption_qwen
+    text_input_dim: 1024
