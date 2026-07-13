@@ -1,0 +1,13 @@
+{
+  "completion_tokens": 22357,
+  "compliance_failures": 19,
+  "effective_cost_usd": 0.04460039999999999,
+  "hard_cap_usd": 0.1,
+  "model_id": "openai/gpt-4.1-mini-2025-04-14",
+  "primary_matched_readout_valid": false,
+  "prompt_sha256": "b1a7b00d98677e88e73ce74d89d2f09a4df9492b3a0e63b78a3dd9497a9fd011",
+  "prompt_tokens": 17073,
+  "provider": "OpenAI",
+  "readout": "secondary_truncated_fallback",
+  "requests": 64
+}
