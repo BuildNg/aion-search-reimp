@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,10 +16,42 @@ from .retrieval import rank_candidates, score_ranked_rows
 
 
 def project_query(model: AIONSearchModel, raw_embedding: Sequence[float]) -> np.ndarray:
-    tensor = torch.tensor(raw_embedding, dtype=torch.float32).unsqueeze(0)
+    device = next(model.parameters()).device
+    tensor = torch.tensor(raw_embedding, dtype=torch.float32, device=device).unsqueeze(0)
     with torch.inference_mode():
         projected = model.text_projector(tensor)
     return projected.squeeze(0).cpu().numpy()
+
+
+def assert_ten_folds(kfold_values: Sequence[int]) -> None:
+    distinct = sorted({int(value) for value in kfold_values})
+    if len(distinct) != 10:
+        raise ValueError(f"Expected exactly ten folds, found {len(distinct)}: {distinct}")
+
+
+def fold_ndcg_at_k(
+    object_ids: Sequence[str],
+    candidate_embeddings: np.ndarray,
+    relevance: Sequence[float],
+    folds: Sequence[int],
+    query_vector: np.ndarray,
+    k: int = 10,
+) -> Dict[str, Any]:
+    """Re-rank within each of the ten folds and report the variation alongside the full-set score."""
+    assert_ten_folds(folds)
+    ids = np.asarray(object_ids, dtype=str)
+    candidates = np.asarray(candidate_embeddings, dtype=np.float32)
+    relevance_array = np.asarray(relevance, dtype=np.float32)
+    folds_array = np.asarray([int(value) for value in folds])
+    per_fold: Dict[int, float] = {}
+    for fold_id in sorted(set(folds_array.tolist())):
+        mask = folds_array == fold_id
+        rows = rank_candidates(
+            ids[mask], candidates[mask], "fold", "", query_vector, relevance_array[mask]
+        )
+        per_fold[fold_id] = score_ranked_rows(rows, k)
+    values = list(per_fold.values())
+    return {"by_fold": per_fold, "mean": float(np.mean(values)), "std": float(np.std(values))}
 
 
 def evaluate_one_query(
@@ -113,15 +145,18 @@ def evaluate_released_benchmarks(
     output_dir: Path,
     reference_gate: Optional[Mapping[str, object]] = None,
     canonical_only: bool = True,
-) -> None:
+    fold_column: Optional[str] = None,
+    fold_k: int = 10,
+) -> Dict[str, Dict[str, Any]]:
     query_rows = query_cache.copy()
     if canonical_only:
         query_rows = query_rows[query_rows["variant"] == "canonical"]
     query_by_category = {row.category: row for row in query_rows.itertuples(index=False)}
     ranked_frames = []
-    metrics: Dict[str, Dict[str, float]] = {}
+    metrics: Dict[str, Dict[str, Any]] = {}
     for benchmark in benchmark_specs:
         name = benchmark["name"]
+        extra_columns = [fold_column] if fold_column else []
         if name == "gz_decals":
             frame = load_hf_frame(
                 benchmark["repo_id"],
@@ -132,6 +167,7 @@ def evaluate_released_benchmarks(
                     "dec",
                     "has-spiral-arms_yes_fraction",
                     "merging_merger_fraction",
+                    *extra_columns,
                 ],
             )
             candidates = np.asarray(frame["aion_search_embedding"].tolist(), dtype=np.float32)
@@ -144,13 +180,15 @@ def evaluate_released_benchmarks(
             frame = load_hf_frame(
                 benchmark["repo_id"],
                 benchmark["revision"],
-                ["aion_search_embedding", "ra", "dec", "is_lens"],
+                ["aion_search_embedding", "ra", "dec", "is_lens", *extra_columns],
             )
             candidates = np.asarray(frame["aion_search_embedding"].tolist(), dtype=np.float32)
             object_ids = [f"{ra:.8f},{dec:.8f}" for ra, dec in zip(frame["ra"], frame["dec"])]
             tasks = {"lens": frame["is_lens"].to_numpy(dtype=np.float32)}
         else:
             raise ValueError(f"Unsupported benchmark: {name}")
+
+        folds = frame[fold_column].to_numpy() if fold_column else None
 
         for category, relevance in tasks.items():
             query_row = query_by_category[category]
@@ -163,6 +201,10 @@ def evaluate_released_benchmarks(
                 category,
                 query_row.text,
             )
+            if folds is not None:
+                query_metrics[f"fold_ndcg@{fold_k}"] = fold_ndcg_at_k(
+                    object_ids, candidates, relevance, folds, projected, fold_k
+                )
             ranked_frames.append(rows)
             metrics[category] = query_metrics
     write_evaluation(ranked_frames, metrics, output_dir)
@@ -174,3 +216,4 @@ def evaluate_released_benchmarks(
         )
         if failures:
             raise AssertionError("Reference gate failed: " + "; ".join(failures))
+    return metrics

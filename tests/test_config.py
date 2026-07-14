@@ -13,6 +13,35 @@ def test_current_configs_validate() -> None:
     assert load_config(ROOT / "configs" / "phase0_reference.yaml")["kind"] == "phase0_reference"
     assert load_config(ROOT / "configs" / "phase1.yaml")["kind"] == "phase1"
     assert load_config(ROOT / "configs" / "phase2_smoke.yaml")["kind"] == "phase2_smoke"
+    assert load_config(ROOT / "configs" / "phase3_10k.yaml")["kind"] == "phase3_10k"
+
+
+def test_phase3_requires_ten_thousand_sample_size() -> None:
+    data = yaml.safe_load((ROOT / "configs" / "phase3_10k.yaml").read_text(encoding="utf-8"))
+    data["source_data"]["sample_size"] = 1000
+    with pytest.raises(ConfigError, match="sample_size must equal 10000"):
+        validate_config(data)
+
+
+def test_phase3_requires_at_least_three_distinct_seeds() -> None:
+    data = yaml.safe_load((ROOT / "configs" / "phase3_10k.yaml").read_text(encoding="utf-8"))
+    data["seeds"] = [13, 13]
+    with pytest.raises(ConfigError, match="at least three seeds"):
+        validate_config(data)
+
+
+def test_phase3_rejects_duplicate_seeds() -> None:
+    data = yaml.safe_load((ROOT / "configs" / "phase3_10k.yaml").read_text(encoding="utf-8"))
+    data["seeds"] = [13, 21, 13]
+    with pytest.raises(ConfigError, match="must not contain duplicates"):
+        validate_config(data)
+
+
+def test_phase3_requires_gz_decals_and_lens_benchmarks() -> None:
+    data = yaml.safe_load((ROOT / "configs" / "phase3_10k.yaml").read_text(encoding="utf-8"))
+    data["benchmarks"] = [data["benchmarks"][0]]
+    with pytest.raises(ConfigError, match="must name exactly gz_decals and lens"):
+        validate_config(data)
 
 
 def test_gpt_reference_rejects_unpinned_alias() -> None:

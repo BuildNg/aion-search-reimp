@@ -48,6 +48,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         "phase0_reference",
         "phase1",
         "phase2_smoke",
+        "phase3_10k",
     }:
         raise ConfigError(f"Unsupported config kind: {kind!r}")
     if kind == "phase0_reference":
@@ -74,6 +75,8 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             "training",
             "conditions",
         }
+        if kind == "phase3_10k":
+            kind_top = kind_top | {"seeds", "benchmarks"}
     allowed_top = common_top | kind_top
     unknown = sorted(set(data) - allowed_top)
     missing_top = sorted(allowed_top - set(data))
@@ -84,7 +87,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
 
     _section(data, "run", {"id", "output_root", "seed"}, {"id", "output_root", "seed"})
     queries = None
-    if kind in {"phase0_reference", "phase2_smoke"}:
+    if kind in {"phase0_reference", "phase2_smoke", "phase3_10k"}:
         queries = _section(
             data,
             "queries",
@@ -287,6 +290,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         if float(cost["reserve_per_request_usd"]) <= 0:
             raise ConfigError("GPT reference reserve_per_request_usd must be positive")
     else:
+        expected_sample_size = 1000 if kind == "phase2_smoke" else 10000
         prerequisites = _section(
             data,
             "prerequisites",
@@ -343,8 +347,10 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             },
         )
         _require_commit(source["revision"], "source_data.revision")
-        if source["sample_size"] != 1000:
-            raise ConfigError("Phase 2 source_data.sample_size must equal 1000")
+        if source["sample_size"] != expected_sample_size:
+            raise ConfigError(
+                f"{kind} source_data.sample_size must equal {expected_sample_size}"
+            )
         if not 0.0 < float(source["train_ratio"]) < 1.0:
             raise ConfigError("source_data.train_ratio must be between zero and one")
 
@@ -503,13 +509,42 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
 
         conditions = data["conditions"]
         if not isinstance(conditions, list) or len(conditions) != 3:
-            raise ConfigError("Phase 2 requires exactly three conditions")
+            raise ConfigError(f"{kind} requires exactly three conditions")
         names = {condition.get("name") for condition in conditions if isinstance(condition, dict)}
         if names != {"R-OAI", "R-QWEN", "Q-QWEN"}:
-            raise ConfigError("Phase 2 conditions must be R-OAI, R-QWEN, and Q-QWEN")
+            raise ConfigError(f"{kind} conditions must be R-OAI, R-QWEN, and Q-QWEN")
         for condition in conditions:
             if set(condition) != {"name", "text_source", "text_input_dim"}:
                 raise ConfigError(f"Condition {condition.get('name')} has the wrong fields")
+
+        if kind == "phase3_10k":
+            seeds = data["seeds"]
+            if not isinstance(seeds, list) or len(seeds) < 3:
+                raise ConfigError("phase3_10k.seeds must be a list of at least three seeds")
+            if any(not isinstance(seed, int) or isinstance(seed, bool) for seed in seeds):
+                raise ConfigError("phase3_10k.seeds must all be integers")
+            if len(set(seeds)) != len(seeds):
+                raise ConfigError("phase3_10k.seeds must not contain duplicates")
+
+            benchmarks = data["benchmarks"]
+            if not isinstance(benchmarks, list) or not benchmarks:
+                raise ConfigError("phase3_10k.benchmarks must be a non-empty list")
+            benchmark_names = set()
+            for index, benchmark in enumerate(benchmarks):
+                if not isinstance(benchmark, dict):
+                    raise ConfigError(f"benchmarks[{index}] must be a mapping")
+                required_benchmark = {"name", "repo_id", "revision"}
+                unknown_benchmark = set(benchmark) - required_benchmark
+                missing_benchmark = required_benchmark - set(benchmark)
+                if unknown_benchmark or missing_benchmark:
+                    raise ConfigError(
+                        f"benchmarks[{index}] unknown={sorted(unknown_benchmark)} "
+                        f"missing={sorted(missing_benchmark)}"
+                    )
+                _require_commit(benchmark["revision"], f"benchmarks[{index}].revision")
+                benchmark_names.add(benchmark["name"])
+            if benchmark_names != {"gz_decals", "lens"}:
+                raise ConfigError("phase3_10k.benchmarks must name exactly gz_decals and lens")
 
     return dict(data)
 

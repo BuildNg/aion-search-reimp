@@ -1,6 +1,7 @@
 import numpy as np
+import pytest
 
-from aion_reimp.metrics import dcg_at_k, ndcg_at_k, recall_at_k
+from aion_reimp.metrics import dcg_at_k, ndcg_at_k, recall_at_k, summary_statistics
 
 
 def test_ndcg_is_one_for_ideal_fractional_ranking() -> None:
@@ -23,3 +24,17 @@ def test_caption_to_image_recall() -> None:
     result = recall_at_k(queries, candidates, [0, 1], ks=(1, 2))
     assert result[1] == 0.5
     assert result[2] == 1.0
+
+
+def test_summary_statistics_across_seeds() -> None:
+    stats = summary_statistics([0.4, 0.5, 0.6])
+    assert stats["mean"] == pytest.approx(0.5)
+    assert stats["std"] == pytest.approx(np.std([0.4, 0.5, 0.6]))
+    assert stats["min"] == pytest.approx(0.4)
+    assert stats["max"] == pytest.approx(0.6)
+    assert stats["n"] == 3
+
+
+def test_summary_statistics_rejects_empty() -> None:
+    with pytest.raises(ValueError):
+        summary_statistics([])

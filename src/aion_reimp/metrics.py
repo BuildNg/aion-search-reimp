@@ -56,6 +56,19 @@ def recall_at_k(
     return result
 
 
+def summary_statistics(values: Sequence[float]) -> Dict[str, float]:
+    array = np.asarray(values, dtype=np.float64)
+    if array.size == 0:
+        raise ValueError("summary_statistics requires at least one value")
+    return {
+        "mean": float(np.mean(array)),
+        "std": float(np.std(array, ddof=0)),
+        "min": float(np.min(array)),
+        "max": float(np.max(array)),
+        "n": int(array.size),
+    }
+
+
 def bootstrap_mean_interval(
     values: Sequence[float],
     samples: int = 2000,
