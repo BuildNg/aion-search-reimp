@@ -14,8 +14,8 @@ queries:
 
 prerequisites:
   phase0_reference_gate: results/phase0_reference_v2/released_evaluation/reference_gate.json
-  phase1_qwen_caption_audit_rows: results/phase1_v1/qwen3vl_8b_audit/caption_audit_rows.csv
-  phase1_gpt_caption_audit_rows: results/phase1_v1/gpt41mini_audit/caption_audit_rows.csv
+  phase1_qwen_caption_audit_rows: results/phase1_v3/qwen3vl_8b_audit/caption_audit_rows.csv
+  phase1_gpt_caption_audit_rows: results/phase1_v3/gpt41mini_audit/caption_audit_rows.csv
   bootstrap_samples: 2000
 
 source_data:

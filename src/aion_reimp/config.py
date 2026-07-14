@@ -194,6 +194,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "prompt_file",
                 "prompt_sha256",
                 "structured_output_engine",
+                "schema_variant",
                 "dtype",
                 "max_new_tokens",
                 "enable_thinking",
@@ -216,6 +217,8 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "max_error_rate",
             },
         )
+        if extractor.get("schema_variant", "flat") not in {"flat", "nested"}:
+            raise ConfigError("extractor.schema_variant must be 'flat' or 'nested'")
         _require_commit(extractor["revision"], "extractor.revision")
         if extractor["model_id"] != "google/gemma-4-26B-A4B-it":
             raise ConfigError("Phase 1 extractor must pin google/gemma-4-26B-A4B-it")

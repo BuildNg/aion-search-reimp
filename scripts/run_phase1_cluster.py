@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import shlex
@@ -24,6 +25,7 @@ from aion_reimp.morphology import (
     GemmaMorphologyExtractor,
     append_morphology_results,
     calibration_metrics,
+    resolve_schema,
 )
 
 
@@ -59,7 +61,10 @@ def _description_stats(rows: pd.DataFrame) -> dict:
 
 
 def main() -> None:
-    config = load_config(Path("configs/phase1.yaml"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=Path, default=Path("configs/phase1.yaml"))
+    args = parser.parse_args()
+    config = load_config(args.config)
     output_root = initialize_run(
         Path(config["run"]["output_root"]),
         config["run"]["id"],
@@ -112,6 +117,8 @@ def main() -> None:
         shutil.copy2(gpt_source, frozen_gpt_path)
 
         extractor_spec = config["extractor"]
+        schema_variant = extractor_spec.get("schema_variant", "flat")
+        schema_json, schema_sha256, parse_fn = resolve_schema(schema_variant)
         extractor_prompt_path = Path(extractor_spec["prompt_file"])
         extractor = GemmaMorphologyExtractor(
             model_path=extractor_spec["model_path"],
@@ -119,6 +126,7 @@ def main() -> None:
             dtype=extractor_spec["dtype"],
             max_new_tokens=extractor_spec["max_new_tokens"],
             enable_thinking=extractor_spec["enable_thinking"],
+            schema_json=schema_json,
         )
         actual_prompt_sha256 = _sha256_text(extractor.prompt_template)
         if actual_prompt_sha256 != extractor_spec["prompt_sha256"]:
@@ -128,6 +136,7 @@ def main() -> None:
             Path(extractor_spec["calibration_file"]),
             response_jsonl=output_root / "extractor_calibration_responses.jsonl",
             error_jsonl=output_root / "extractor_calibration_errors.jsonl",
+            parse_fn=parse_fn,
         )
         (output_root / "extractor_calibration.json").write_text(
             json.dumps(calibration, indent=2, sort_keys=True), encoding="utf-8"
@@ -154,6 +163,7 @@ def main() -> None:
                 extraction_path,
                 error_jsonl=output_root / f"{name}_errors.jsonl",
                 max_error_rate=extractor_spec["max_error_rate"],
+                parse_fn=parse_fn,
             )
             extractions = _read_jsonl(extraction_path)
             audit_dir = output_root / f"{name}_audit"
@@ -208,6 +218,8 @@ def main() -> None:
                 "revision": extractor_spec["revision"],
                 "enable_thinking": extractor_spec["enable_thinking"],
                 "structured_output_engine": extractor_spec["structured_output_engine"],
+                "schema_variant": schema_variant,
+                "schema_sha256": schema_sha256,
             },
             "released_path_overlap": {
                 "gpt41mini": path_metrics["gpt41mini"],

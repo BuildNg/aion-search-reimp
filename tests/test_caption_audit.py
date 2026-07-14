@@ -13,12 +13,23 @@ from aion_reimp.caption_audit import (
 )
 from aion_reimp.captioning import append_caption_results, parse_caption_response
 from aion_reimp.morphology import (
+    EdgeOnNo,
+    EdgeOnYes,
+    FeaturedClassification,
     GalaxyDecisionTree,
+    NESTED_SCHEMA_JSON,
+    NestedGalaxyDecisionTree,
     SCHEMA_JSON,
+    SpiralArmsYes,
     build_decision_tree_path,
+    build_nested_path,
     calibration_metrics,
+    decision_tree_answers,
     model_vocab_size,
+    nested_decision_tree_answers,
     parse_morphology_response,
+    parse_nested_morphology_response,
+    resolve_schema,
 )
 
 
@@ -102,6 +113,87 @@ def test_strips_trailing_special_tokens_before_schema_parse() -> None:
         parse_morphology_response(
             "cal-smooth", _strip_trailing_special_tokens("{bad}<eos>", specials)
         )
+
+
+def _flat_featured_tree() -> GalaxyDecisionTree:
+    return GalaxyDecisionTree(
+        overall_shape="featured-or-disk",
+        edge_on="edge-on-no",
+        has_spiral_arms="has-spiral-arms-yes",
+        spiral_winding="tight",
+        spiral_arm_count="2",
+        bar="strong",
+        bulge_size="small",
+        merging="none",
+    )
+
+
+def _nested_featured_tree() -> NestedGalaxyDecisionTree:
+    return NestedGalaxyDecisionTree(
+        classification=FeaturedClassification(
+            overall_shape="featured-or-disk",
+            orientation=EdgeOnNo(
+                edge_on="edge-on-no",
+                spiral_arms=SpiralArmsYes(
+                    has_spiral_arms="has-spiral-arms-yes",
+                    spiral_winding="tight",
+                    spiral_arm_count="2",
+                ),
+                bar="strong",
+                bulge_size="small",
+            ),
+            merging="none",
+        )
+    )
+
+
+def test_nested_schema_reproduces_flat_path_and_answers() -> None:
+    flat, nested = _flat_featured_tree(), _nested_featured_tree()
+    assert build_nested_path(nested) == build_decision_tree_path(flat)
+    assert nested_decision_tree_answers(nested) == decision_tree_answers(flat)
+    # edge-on-yes branch also reproduces
+    flat_yes = GalaxyDecisionTree(
+        overall_shape="featured-or-disk", edge_on="edge-on-yes",
+        edge_on_bulge="rounded", merging="none",
+    )
+    nested_yes = NestedGalaxyDecisionTree(
+        classification=FeaturedClassification(
+            overall_shape="featured-or-disk",
+            orientation=EdgeOnYes(edge_on="edge-on-yes", edge_on_bulge="rounded"),
+            merging="none",
+        )
+    )
+    assert build_nested_path(nested_yes) == build_decision_tree_path(flat_yes)
+    assert nested_decision_tree_answers(nested_yes) == decision_tree_answers(flat_yes)
+
+
+def test_nested_schema_structurally_forbids_misslotting() -> None:
+    # edge-on-yes carrying a non-edge-on field (bulge_size) is unrepresentable
+    bad = (
+        '{"classification": {"overall_shape": "featured-or-disk", '
+        '"orientation": {"edge_on": "edge-on-yes", "edge_on_bulge": "rounded", '
+        '"bulge_size": "small"}, "merging": "none"}}'
+    )
+    with pytest.raises(ValueError, match="schema-constrained"):
+        parse_nested_morphology_response("g1", bad)
+    # a well-formed edge-on-no response still parses and scores
+    good = (
+        '{"classification": {"overall_shape": "featured-or-disk", '
+        '"orientation": {"edge_on": "edge-on-no", '
+        '"spiral_arms": {"has_spiral_arms": "has-spiral-arms-no"}, '
+        '"bar": "no", "bulge_size": "none"}, "merging": "none"}}'
+    )
+    result = parse_nested_morphology_response("g1", good)
+    assert result.schema_sha256 != resolve_schema("flat")[1]
+    assert "bulge-size_none" in result.judge_path
+
+
+def test_nested_decoding_schema_is_xgrammar_friendly() -> None:
+    # XGrammar handles anyOf/$ref but not oneOf/discriminator
+    assert "oneOf" not in NESTED_SCHEMA_JSON
+    assert "discriminator" not in NESTED_SCHEMA_JSON
+    assert "anyOf" in NESTED_SCHEMA_JSON
+    assert resolve_schema("nested")[0] == NESTED_SCHEMA_JSON
 
 
 def test_decision_path_matches_released_branch_logic() -> None:
