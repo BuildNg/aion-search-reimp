@@ -314,6 +314,10 @@ class GemmaMorphologyExtractor:
             response = self.processor.decode(
                 outputs[0][input_length:], skip_special_tokens=True
             )
+        tokenizer = getattr(self.processor, "tokenizer", None)
+        response = _strip_trailing_special_tokens(
+            response, getattr(tokenizer, "all_special_tokens", ()) or ()
+        )
         return response.strip(), {
             "decoded_with_special_tokens": decoded,
             "used_processor_parse_response": used_parse_response,
@@ -323,6 +327,28 @@ class GemmaMorphologyExtractor:
             "structured_output_engine": "xgrammar",
             "xgrammar_version": self._xgrammar_version,
         }
+
+
+def _strip_trailing_special_tokens(text: str, special_tokens: Iterable[str]) -> str:
+    """Remove trailing tokenizer special tokens (e.g. Gemma's ``<eos>``).
+
+    transformers 5.12's ``processor.parse_response`` keeps the terminal special
+    token in the returned content, which then breaks strict JSON schema parsing.
+    The ``skip_special_tokens=True`` decode path never carries them, so this is a
+    no-op there. Only exact trailing special-token strings are removed -- never
+    other characters -- so it does not repair otherwise-malformed JSON.
+    """
+    specials = [token for token in special_tokens if token]
+    changed = True
+    while changed:
+        changed = False
+        text = text.rstrip()
+        for token in specials:
+            if text.endswith(token):
+                text = text[: -len(token)]
+                changed = True
+                break
+    return text
 
 
 def _response_text(parsed: Any) -> str:

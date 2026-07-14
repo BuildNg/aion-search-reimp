@@ -83,6 +83,27 @@ def test_extractor_does_not_broadly_repair_invalid_json() -> None:
         parse_morphology_response("g1", "{'overall_shape': invalid}")
 
 
+def test_strips_trailing_special_tokens_before_schema_parse() -> None:
+    from aion_reimp.morphology import _strip_trailing_special_tokens
+
+    specials = ["<eos>", "<end_of_turn>"]
+    raw = '{"overall_shape": "smooth", "roundness": "round", "merging": "none"}<eos>'
+    cleaned = _strip_trailing_special_tokens(raw, specials)
+    assert cleaned == (
+        '{"overall_shape": "smooth", "roundness": "round", "merging": "none"}'
+    )
+    # stacked trailing special tokens are all removed
+    assert _strip_trailing_special_tokens("x<end_of_turn><eos>", specials) == "x"
+    # the cleaned response now validates against the released schema
+    parsed = parse_morphology_response("cal-smooth", cleaned)
+    assert parsed.tree.overall_shape == "smooth"
+    # stripping the token does not rescue genuinely malformed JSON
+    with pytest.raises(ValueError, match="schema-constrained"):
+        parse_morphology_response(
+            "cal-smooth", _strip_trailing_special_tokens("{bad}<eos>", specials)
+        )
+
+
 def test_decision_path_matches_released_branch_logic() -> None:
     tree = GalaxyDecisionTree(
         overall_shape="featured-or-disk",
