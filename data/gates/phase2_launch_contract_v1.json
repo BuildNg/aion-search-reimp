@@ -1,0 +1,68 @@
+{
+  "launch_allowed": true,
+  "phase0": {
+    "lens_ndcg_at_10": {
+      "expected_paper_rounded": 0.173,
+      "observed": 0.17318663334822615,
+      "observed_rounded": 0.173,
+      "passed": true
+    },
+    "lens_top10_confirmed": {
+      "expected": 2,
+      "observed": 2,
+      "passed": true
+    },
+    "merger_ndcg_at_10": {
+      "expected_paper_rounded": 0.554,
+      "observed": 0.5543779160234152,
+      "observed_rounded": 0.554,
+      "passed": true
+    },
+    "passed": true,
+    "source_path": "results\\phase0_reference_v2\\released_evaluation\\reference_gate.json",
+    "source_sha256": "7fe289ae1cb2c40df1a296439d0308da91c4d35043fc091fa527b6d0c05ac32b",
+    "spiral_ndcg_at_10": {
+      "expected_paper_rounded": 0.941,
+      "observed": 0.9413692977923578,
+      "observed_rounded": 0.941,
+      "passed": true
+    }
+  },
+  "phase1": {
+    "accuracy_delta_gpt_minus_qwen": 0.1756272401433691,
+    "gpt41mini": {
+      "abstention_ci95": [
+        0.07553787158952084,
+        0.1386156681361567
+      ],
+      "abstention_rate": 0.10752688172043011,
+      "accuracy": 0.5125448028673835,
+      "accuracy_ci95": [
+        0.45985401459854014,
+        0.5639264212190993
+      ],
+      "answers": 279,
+      "objects": 64,
+      "source_path": "results\\phase1_v3\\gpt41mini_audit\\caption_audit_rows.csv",
+      "source_sha256": "3495dec2c2636a5dff711071ba725698dba33d808120cd902fa9ff5913710a44"
+    },
+    "qwen3vl_8b": {
+      "abstention_ci95": [
+        0.025175359712230217,
+        0.07067624718288304
+      ],
+      "abstention_rate": 0.04659498207885305,
+      "accuracy": 0.33691756272401435,
+      "accuracy_ci95": [
+        0.2702653383310318,
+        0.4064777848051229
+      ],
+      "answers": 279,
+      "objects": 64,
+      "source_path": "results\\phase1_v3\\qwen3vl_8b_audit\\caption_audit_rows.csv",
+      "source_sha256": "e5aa076851fcd038b61b18c5ad95daf419e0ebf0ac0a51bd00055b5273049453"
+    },
+    "role": "diagnostic_only"
+  },
+  "run_class": "engineering_smoke"
+}
