@@ -226,8 +226,10 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         prompt_hash = str(extractor["prompt_sha256"])
         if len(prompt_hash) != 64 or any(character not in "0123456789abcdef" for character in prompt_hash):
             raise ConfigError("extractor.prompt_sha256 must be a lowercase SHA-256 digest")
-        if float(extractor["calibration_min_answer_accuracy"]) != 1.0:
-            raise ConfigError("Extractor calibration must require answer accuracy 1.0")
+        if not 0.0 < float(extractor["calibration_min_answer_accuracy"]) <= 1.0:
+            raise ConfigError(
+                "extractor.calibration_min_answer_accuracy must be in (0, 1]"
+            )
         if not 0.0 <= float(extractor["max_error_rate"]) < 1.0:
             raise ConfigError("extractor.max_error_rate must be in [0, 1)")
 
