@@ -59,6 +59,7 @@ text_embedding:
   max_length: 8192
   document_instruction: null
   query_instruction: Given an astronomical search query, retrieve galaxy descriptions whose observable properties match the query.
+  batch_size: 64
 
 caches:
   phase1_normalized_dir: data/cache/qwen_embeddings/fp32_normalized_v1

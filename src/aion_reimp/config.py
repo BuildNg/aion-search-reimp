@@ -408,6 +408,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "max_length",
                 "document_instruction",
                 "query_instruction",
+                "batch_size",
             },
             {
                 "model_id",
@@ -419,6 +420,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 "max_length",
                 "document_instruction",
                 "query_instruction",
+                "batch_size",
             },
         )
         _require_commit(embedding["revision"], "text_embedding.revision")
@@ -432,6 +434,10 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             raise ConfigError("text_embedding.pooling must be last_token")
         if float(embedding["normalization_atol"]) != 1e-3:
             raise ConfigError("text_embedding.normalization_atol must equal 0.001")
+        if not isinstance(embedding["batch_size"], int) or isinstance(embedding["batch_size"], bool):
+            raise ConfigError("text_embedding.batch_size must be an integer")
+        if embedding["batch_size"] <= 0:
+            raise ConfigError("text_embedding.batch_size must be positive")
 
         _section(
             data,

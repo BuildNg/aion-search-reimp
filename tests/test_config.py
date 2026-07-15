@@ -81,6 +81,17 @@ def test_pooling_must_be_last_token() -> None:
         validate_config(data)
 
 
+def test_text_embedding_batch_size_must_be_positive_int() -> None:
+    data = yaml.safe_load((ROOT / "configs" / "phase3_10k.yaml").read_text(encoding="utf-8"))
+    data["text_embedding"]["batch_size"] = 0
+    with pytest.raises(ConfigError, match="batch_size must be positive"):
+        validate_config(data)
+
+    data["text_embedding"]["batch_size"] = "64"
+    with pytest.raises(ConfigError, match="batch_size must be an integer"):
+        validate_config(data)
+
+
 def test_phase_specific_top_level_key_is_rejected() -> None:
     data = yaml.safe_load((ROOT / "configs" / "phase1.yaml").read_text(encoding="utf-8"))
     data["reference_model"] = {}

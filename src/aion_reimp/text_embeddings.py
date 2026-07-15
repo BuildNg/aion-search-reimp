@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Mapping, Sequence
+from typing import Any, Iterator, List, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,7 @@ class EmbeddingSpec:
     normalize: bool = True
     max_length: int = 8192
     query_instruction: str = ""
+    batch_size: int = 32
 
     @property
     def normalization_policy(self) -> NormalizationPolicy:
@@ -50,7 +51,15 @@ class EmbeddingSpec:
             normalize=values["normalize"],
             max_length=values["max_length"],
             query_instruction=values["query_instruction"],
+            batch_size=values["batch_size"],
         )
+
+
+def _chunked(sequence: Sequence[Any], size: int) -> Iterator[List[Any]]:
+    if size <= 0:
+        raise ValueError("batch_size must be positive")
+    for start in range(0, len(sequence), size):
+        yield list(sequence[start : start + size])
 
 
 class QwenEmbedder:
@@ -78,22 +87,29 @@ class QwenEmbedder:
         encoded_texts = list(texts)
         if role == "query":
             encoded_texts = [format_query(text, self.spec.query_instruction) for text in texts]
-        tokens = self.tokenizer(
-            encoded_texts,
-            padding=True,
-            truncation=True,
-            max_length=self.spec.max_length,
-            return_tensors="pt",
-        )
-        tokens = {key: value.to(self.model.device) for key, value in tokens.items()}
-        with torch.inference_mode():
-            outputs = self.model(**tokens)
-            embeddings = last_token_pool(
-                outputs.last_hidden_state, tokens["attention_mask"]
-            ).float()
-            if self.spec.normalize:
-                embeddings = F.normalize(embeddings, p=2, dim=1)
-        embeddings = embeddings.cpu().numpy()
+        if not encoded_texts:
+            return np.zeros((0, self.spec.dimension), dtype=np.float32)
+
+        batches: List[np.ndarray] = []
+        for batch in _chunked(encoded_texts, self.spec.batch_size):
+            tokens = self.tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=self.spec.max_length,
+                return_tensors="pt",
+            )
+            tokens = {key: value.to(self.model.device) for key, value in tokens.items()}
+            with torch.inference_mode():
+                outputs = self.model(**tokens)
+                embeddings = last_token_pool(
+                    outputs.last_hidden_state, tokens["attention_mask"]
+                ).float()
+                if self.spec.normalize:
+                    embeddings = F.normalize(embeddings, p=2, dim=1)
+            batches.append(embeddings.cpu().numpy())
+
+        embeddings = np.concatenate(batches, axis=0)
         if embeddings.shape[1] != self.spec.dimension:
             raise ValueError(
                 f"Expected {self.spec.dimension} embedding dimensions, got {embeddings.shape[1]}"
