@@ -43,6 +43,23 @@ class ModelConfig:
             raise ValueError("Only use_mean_embeddings=true is in scope")
         return cls(**{key: values[key] for key in REQUIRED_MODEL_KEYS})
 
+    @classmethod
+    def from_shared_and_condition(
+        cls, model_shared: Mapping[str, Any], condition: Mapping[str, Any]
+    ) -> "ModelConfig":
+        """Merge a config's shared ``model`` block with one condition's text_input_dim."""
+        return cls.from_mapping(
+            {
+                "image_input_dim": model_shared["image_input_dim"],
+                "text_input_dim": condition["text_input_dim"],
+                "embedding_dim": model_shared["embedding_dim"],
+                "image_hidden_dim": model_shared["image_hidden_dim"],
+                "text_hidden_dim": model_shared["text_hidden_dim"],
+                "dropout": model_shared["dropout"],
+                "use_mean_embeddings": model_shared["use_mean_embeddings"],
+            }
+        )
+
 
 class ResidualProjector(nn.Module):
     def __init__(

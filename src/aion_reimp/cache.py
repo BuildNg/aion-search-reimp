@@ -118,6 +118,15 @@ def validate_embedding_cache(
             raise ValueError(f"Instruction hash mismatch for object_id={row.object_id}")
 
 
+def load_cache_subset(path: Path, object_ids: Any) -> pd.DataFrame:
+    """Read exactly the requested object_id rows from a parquet cache."""
+    identifiers = [str(value) for value in object_ids]
+    frame = pd.read_parquet(path, filters=[("object_id", "in", identifiers)])
+    if set(frame["object_id"].astype(str)) != set(identifiers):
+        raise ValueError(f"Cache subset from {path} does not match requested object IDs")
+    return frame
+
+
 def cache_fingerprint(frame: pd.DataFrame) -> str:
     return _combine_row_fingerprints(
         _row_fingerprint(row) for row in frame.itertuples(index=False)

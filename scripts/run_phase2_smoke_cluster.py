@@ -8,37 +8,22 @@ import shlex
 import sys
 from pathlib import Path
 
-import pandas as pd
 import torch
 
 from aion_reimp.artifacts import initialize_run, tracked_run
-from aion_reimp.cache import (
-    NormalizationPolicy,
-    cache_fingerprint,
-    ingest_released_embeddings,
-    validate_embedding_cache,
-    write_embedding_cache,
-)
-from aion_reimp.captioning import QwenCaptioner, append_caption_results
 from aion_reimp.config import load_config
 from aion_reimp.launch_contract import build_launch_contract, require_launch_allowed
-from aion_reimp.manifest import write_manifest
 from aion_reimp.model import ModelConfig
-from aion_reimp.smoke import prepare_smoke_source
-from aion_reimp.text_embeddings import EmbeddingSpec, QwenEmbedder, embedding_frame
+from aion_reimp.smoke import (
+    build_common_text_embedding_caches,
+    generate_qwen_captions_and_common_set,
+    prepare_smoke_source,
+)
 from aion_reimp.training import (
     TrainingSpec,
     assemble_condition_rows,
     train_condition,
 )
-
-
-def _load_subset(path: Path, object_ids) -> pd.DataFrame:
-    identifiers = [str(value) for value in object_ids]
-    frame = pd.read_parquet(path, filters=[("object_id", "in", identifiers)])
-    if set(frame["object_id"].astype(str)) != set(identifiers):
-        raise ValueError(f"Cache subset from {path} does not match requested object IDs")
-    return frame
 
 
 def main() -> None:
@@ -73,98 +58,23 @@ def main() -> None:
         )
 
         caption_spec = config["captioning"]
-        captioner = QwenCaptioner(
-            caption_spec["model_id"],
-            caption_spec["revision"],
-            Path(caption_spec["prompt_file"]).read_text(encoding="utf-8"),
-            dtype=caption_spec["dtype"],
-            max_new_tokens=caption_spec["max_new_tokens"],
-        )
-        captions_path = output_root / "q_qwen_captions.jsonl"
-        error_path = output_root / "errors.jsonl"
-        caption_stats = append_caption_results(
-            captioner,
-            source.loc[:, ["object_id", "image_path"]].to_dict(orient="records"),
-            captions_path,
-            error_jsonl=error_path,
-            max_error_rate=float(caption_spec["max_error_rate"]),
-        )
-        (output_root / "caption_generation.json").write_text(
-            json.dumps(caption_stats, indent=2, sort_keys=True), encoding="utf-8"
-        )
-        del captioner
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        captions = pd.read_json(captions_path, lines=True)
-        successful_ids = set(captions["object_id"].astype(str))
-        common_source = source[source["object_id"].astype(str).isin(successful_ids)].copy()
-        common_manifest = manifest[
-            manifest["object_id"].astype(str).isin(successful_ids)
-        ].copy()
-        if len(common_source) != len(captions):
-            raise AssertionError("Successful captions do not join one-to-one with smoke source")
-        write_manifest(common_manifest, output_root / "common_manifest.parquet")
-
-        policy = NormalizationPolicy(
-            required=True, atol=float(config["text_embedding"]["normalization_atol"])
-        )
-        r_oai = ingest_released_embeddings(
-            common_source.rename(
-                columns={
-                    "released_summary": "summary",
-                    "released_openai_embedding": "summary_text_embedding",
-                }
-            ),
-            text_column="summary",
-            embedding_column="summary_text_embedding",
-            normalization_policy=policy,
-        )
-        write_embedding_cache(
-            r_oai,
-            output_root / "r_oai_embeddings.parquet",
-            normalization_policy=policy,
-            metadata={"transform": "released_verbatim_subset"},
+        captions, common_source, common_manifest, caption_stats = (
+            generate_qwen_captions_and_common_set(
+                caption_spec,
+                source,
+                manifest,
+                output_root,
+                "Successful captions do not join one-to-one with smoke source",
+            )
         )
 
-        r_qwen_source_path = (
-            Path(config["caches"]["phase1_normalized_dir"])
-            / config["caches"]["released_summary_qwen"]
-        )
-        r_qwen = _load_subset(r_qwen_source_path, common_source["object_id"])
-        validate_embedding_cache(r_qwen, policy)
-        r_qwen_source_meta = json.loads(
-            r_qwen_source_path.with_suffix(
-                r_qwen_source_path.suffix + ".meta.json"
-            ).read_text(encoding="utf-8")
-        )
-        write_embedding_cache(
-            r_qwen,
-            output_root / "r_qwen_embeddings.parquet",
-            normalization_policy=policy,
-            metadata={
-                "source_path": str(r_qwen_source_path),
-                "source_fingerprint": r_qwen_source_meta["fingerprint"],
-                "subset_fingerprint": cache_fingerprint(r_qwen),
-                "transform": "manifest_subset",
-            },
-        )
-
-        embedding_spec = EmbeddingSpec.from_mapping(config["text_embedding"])
-        embedder = QwenEmbedder(embedding_spec)
-        q_vectors = embedder.encode(captions["description"].astype(str).tolist(), "document")
-        q_qwen = embedding_frame(
-            captions["object_id"].astype(str).tolist(),
-            captions["description"].astype(str).tolist(),
-            q_vectors,
-            "document",
-            embedding_spec,
-        )
-        write_embedding_cache(
-            q_qwen,
-            output_root / "q_qwen_embeddings.parquet",
-            normalization_policy=embedding_spec.normalization_policy,
-            metadata={"caption_prompt": caption_spec["prompt_file"]},
+        r_oai, r_qwen, q_qwen, embedding_spec, embedder = build_common_text_embedding_caches(
+            common_source,
+            captions,
+            config["text_embedding"],
+            config["caches"],
+            caption_spec["prompt_file"],
+            output_root,
         )
         del embedder
         gc.collect()
@@ -179,17 +89,7 @@ def main() -> None:
         model_shared = config["model"]
         condition_gates = {}
         for condition in config["conditions"]:
-            model_config = ModelConfig.from_mapping(
-                {
-                    "image_input_dim": model_shared["image_input_dim"],
-                    "text_input_dim": condition["text_input_dim"],
-                    "embedding_dim": model_shared["embedding_dim"],
-                    "image_hidden_dim": model_shared["image_hidden_dim"],
-                    "text_hidden_dim": model_shared["text_hidden_dim"],
-                    "dropout": model_shared["dropout"],
-                    "use_mean_embeddings": model_shared["use_mean_embeddings"],
-                }
-            )
+            model_config = ModelConfig.from_shared_and_condition(model_shared, condition)
             condition_rows = assemble_condition_rows(
                 common_source, caches[condition["text_source"]]
             )

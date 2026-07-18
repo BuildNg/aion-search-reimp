@@ -24,7 +24,7 @@ from aion_reimp.morphology import (
     build_decision_tree_path,
     build_nested_path,
     calibration_metrics,
-    decision_tree_answers,
+    flat_decision_tree_answers,
     model_vocab_size,
     nested_decision_tree_answers,
     parse_morphology_response,
@@ -150,7 +150,7 @@ def _nested_featured_tree() -> NestedGalaxyDecisionTree:
 def test_nested_schema_reproduces_flat_path_and_answers() -> None:
     flat, nested = _flat_featured_tree(), _nested_featured_tree()
     assert build_nested_path(nested) == build_decision_tree_path(flat)
-    assert nested_decision_tree_answers(nested) == decision_tree_answers(flat)
+    assert nested_decision_tree_answers(nested) == flat_decision_tree_answers(flat)
     # edge-on-yes branch also reproduces
     flat_yes = GalaxyDecisionTree(
         overall_shape="featured-or-disk", edge_on="edge-on-yes",
@@ -164,7 +164,7 @@ def test_nested_schema_reproduces_flat_path_and_answers() -> None:
         )
     )
     assert build_nested_path(nested_yes) == build_decision_tree_path(flat_yes)
-    assert nested_decision_tree_answers(nested_yes) == decision_tree_answers(flat_yes)
+    assert nested_decision_tree_answers(nested_yes) == flat_decision_tree_answers(flat_yes)
 
 
 def test_nested_schema_structurally_forbids_misslotting() -> None:

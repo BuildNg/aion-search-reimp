@@ -11,6 +11,8 @@ from typing import Annotated, Any, Dict, Iterable, List, Literal, Mapping, Optio
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .utils import append_jsonl, read_object_ids
+
 
 class GalaxyDecisionTree(BaseModel):
     """Released GalaxyBench response schema, reproduced field-for-field."""
@@ -303,8 +305,15 @@ def _answer(value: Optional[str]) -> str:
     return "not-stated" if value in {None, "not-mentioned"} else str(value)
 
 
-def decision_tree_answers(tree: GalaxyDecisionTree) -> Dict[str, str]:
-    """Normalize the released tree for the secondary per-question diagnostic."""
+def flat_decision_tree_answers(tree: GalaxyDecisionTree) -> Dict[str, str]:
+    """Normalize the released flat tree for the secondary per-question diagnostic.
+
+    Named to pair with ``nested_decision_tree_answers`` below: both produce the
+    same per-question answer dict, one from the flat schema and one from the
+    branch-enforcing nested schema. This is unrelated to
+    ``caption_audit.decision_tree_answers``, which parses the human-volunteer
+    label's ``decision_tree`` field rather than a judge's structured output.
+    """
     answers = {
         "smooth-or-featured": tree.overall_shape,
         "how-rounded": "not-applicable",
@@ -352,7 +361,7 @@ def parse_morphology_response(object_id: str, response: str) -> MorphologyResult
         object_id=str(object_id),
         tree=tree,
         judge_path=build_decision_tree_path(tree),
-        answers=decision_tree_answers(tree),
+        answers=flat_decision_tree_answers(tree),
         raw_response=response,
     )
 
@@ -421,7 +430,7 @@ def build_nested_path(tree: NestedGalaxyDecisionTree) -> List[str]:
 
 
 def nested_decision_tree_answers(tree: NestedGalaxyDecisionTree) -> Dict[str, str]:
-    """Per-question diagnostic answers, matching decision_tree_answers exactly."""
+    """Per-question diagnostic answers, matching flat_decision_tree_answers exactly."""
     answers = {
         question: "not-applicable"
         for question in (
@@ -652,8 +661,8 @@ def append_morphology_results(
         raise ValueError("Morphology input contains duplicate object_id values")
     output_jsonl = Path(output_jsonl)
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    completed = _read_object_ids(output_jsonl)
-    failed = _read_object_ids(Path(error_jsonl)) if error_jsonl is not None else set()
+    completed = read_object_ids(output_jsonl)
+    failed = read_object_ids(Path(error_jsonl)) if error_jsonl is not None else set()
     if completed & failed:
         raise ValueError("Morphology outputs and errors overlap")
     unexpected = (completed | failed) - set(ids)
@@ -721,26 +730,6 @@ def append_morphology_results(
     }
 
 
-def _read_object_ids(path: Path) -> set[str]:
-    if not Path(path).exists():
-        return set()
-    return {
-        str(json.loads(line)["object_id"])
-        for line in Path(path).read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
-
-
-def _append_jsonl(path: Optional[Path], record: Mapping[str, Any]) -> None:
-    if path is None:
-        return
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(dict(record), sort_keys=True) + "\n")
-        handle.flush()
-
-
 def calibration_metrics(
     extractor: Any,
     calibration_path: Path,
@@ -775,7 +764,7 @@ def calibration_metrics(
                 )
             else:
                 raw_response = extractor.generate_response(description)
-            _append_jsonl(
+            append_jsonl(
                 response_jsonl,
                 {
                     "object_id": object_id,
@@ -787,7 +776,7 @@ def calibration_metrics(
             result = parse_fn(object_id, raw_response)
         except Exception as error:
             parse_errors += 1
-            _append_jsonl(
+            append_jsonl(
                 error_jsonl,
                 {
                     "object_id": object_id,

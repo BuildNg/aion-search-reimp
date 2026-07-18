@@ -49,6 +49,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         "phase1",
         "phase2_smoke",
         "phase3_10k",
+        "phase3_10k_seedext",
     }:
         raise ConfigError(f"Unsupported config kind: {kind!r}")
     if kind == "phase0_reference":
@@ -75,8 +76,10 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             "training",
             "conditions",
         }
-        if kind == "phase3_10k":
+        if kind in ("phase3_10k", "phase3_10k_seedext"):
             kind_top = kind_top | {"seeds", "benchmarks"}
+        if kind == "phase3_10k_seedext":
+            kind_top = kind_top | {"source_run"}
     allowed_top = common_top | kind_top
     unknown = sorted(set(data) - allowed_top)
     missing_top = sorted(allowed_top - set(data))
@@ -87,7 +90,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
 
     _section(data, "run", {"id", "output_root", "seed"}, {"id", "output_root", "seed"})
     queries = None
-    if kind in {"phase0_reference", "phase2_smoke", "phase3_10k"}:
+    if kind in {"phase0_reference", "phase2_smoke", "phase3_10k", "phase3_10k_seedext"}:
         queries = _section(
             data,
             "queries",
@@ -523,18 +526,22 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             if set(condition) != {"name", "text_source", "text_input_dim"}:
                 raise ConfigError(f"Condition {condition.get('name')} has the wrong fields")
 
-        if kind == "phase3_10k":
+        if kind in ("phase3_10k", "phase3_10k_seedext"):
             seeds = data["seeds"]
-            if not isinstance(seeds, list) or len(seeds) < 3:
-                raise ConfigError("phase3_10k.seeds must be a list of at least three seeds")
+            minimum_seeds = 3 if kind == "phase3_10k" else 1
+            if not isinstance(seeds, list) or len(seeds) < minimum_seeds:
+                raise ConfigError(
+                    f"{kind}.seeds must be a list of at least "
+                    f"{'three' if minimum_seeds == 3 else 'one'} seeds"
+                )
             if any(not isinstance(seed, int) or isinstance(seed, bool) for seed in seeds):
-                raise ConfigError("phase3_10k.seeds must all be integers")
+                raise ConfigError(f"{kind}.seeds must all be integers")
             if len(set(seeds)) != len(seeds):
-                raise ConfigError("phase3_10k.seeds must not contain duplicates")
+                raise ConfigError(f"{kind}.seeds must not contain duplicates")
 
             benchmarks = data["benchmarks"]
             if not isinstance(benchmarks, list) or not benchmarks:
-                raise ConfigError("phase3_10k.benchmarks must be a non-empty list")
+                raise ConfigError(f"{kind}.benchmarks must be a non-empty list")
             benchmark_names = set()
             for index, benchmark in enumerate(benchmarks):
                 if not isinstance(benchmark, dict):
@@ -550,7 +557,32 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
                 _require_commit(benchmark["revision"], f"benchmarks[{index}].revision")
                 benchmark_names.add(benchmark["name"])
             if benchmark_names != {"gz_decals", "lens"}:
-                raise ConfigError("phase3_10k.benchmarks must name exactly gz_decals and lens")
+                raise ConfigError(f"{kind}.benchmarks must name exactly gz_decals and lens")
+
+        if kind == "phase3_10k_seedext":
+            source_run = _section(
+                data,
+                "source_run",
+                {"run_id", "output_root", "reused_seeds"},
+                {"run_id", "output_root", "reused_seeds"},
+            )
+            if not str(source_run["run_id"]).strip():
+                raise ConfigError("source_run.run_id must be a non-empty string")
+            if not str(source_run["output_root"]).strip():
+                raise ConfigError("source_run.output_root must be a non-empty string")
+            reused_seeds = source_run["reused_seeds"]
+            if not isinstance(reused_seeds, list) or not reused_seeds:
+                raise ConfigError("source_run.reused_seeds must be a non-empty list")
+            if any(
+                not isinstance(seed, int) or isinstance(seed, bool) for seed in reused_seeds
+            ):
+                raise ConfigError("source_run.reused_seeds must all be integers")
+            if len(set(reused_seeds)) != len(reused_seeds):
+                raise ConfigError("source_run.reused_seeds must not contain duplicates")
+            if set(data["seeds"]) & set(reused_seeds):
+                raise ConfigError(
+                    "phase3_10k_seedext.seeds must be disjoint from source_run.reused_seeds"
+                )
 
     return dict(data)
 

@@ -3,32 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in Path(path).read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from aion_reimp.utils import read_jsonl, sha256_file
 
 
 def _restore(source: Path, output: Path) -> dict[str, Any]:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite caption artifact: {output}")
-    rows = _read_jsonl(source)
+    rows = read_jsonl(source)
     if len(rows) != 64 or len({str(row["object_id"]) for row in rows}) != 64:
         raise ValueError(f"Expected 64 unique caption rows in {source}")
     restored = []
@@ -51,9 +36,9 @@ def _restore(source: Path, output: Path) -> dict[str, Any]:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
     return {
         "source": str(source),
-        "source_sha256": _sha256(source),
+        "source_sha256": sha256_file(source),
         "output": str(output),
-        "output_sha256": _sha256(output),
+        "output_sha256": sha256_file(output),
         "rows": len(restored),
         "transform": "restore_description_from_preserved_raw_response_without_truncation",
     }
@@ -74,8 +59,8 @@ def main() -> None:
         "qwen": _restore(args.qwen_source, args.qwen_output),
         "gpt": _restore(args.gpt_source, args.gpt_output),
     }
-    qwen_ids = {row["object_id"] for row in _read_jsonl(args.qwen_output)}
-    gpt_ids = {row["object_id"] for row in _read_jsonl(args.gpt_output)}
+    qwen_ids = {row["object_id"] for row in read_jsonl(args.qwen_output)}
+    gpt_ids = {row["object_id"] for row in read_jsonl(args.gpt_output)}
     if qwen_ids != gpt_ids:
         raise ValueError("Restored Qwen and GPT artifacts do not share the same object set")
     args.lineage.parent.mkdir(parents=True, exist_ok=True)

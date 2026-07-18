@@ -32,6 +32,16 @@ def combine_exclusion_sets(exclusion_sets: Mapping[str, Iterable[str]]) -> Dict[
     return {object_id: ";".join(sorted(names)) for object_id, names in reasons.items()}
 
 
+def _unit_vectors(frame: pd.DataFrame):
+    """Unit-sphere Cartesian vectors for a table's ra/dec columns (degrees)."""
+    import numpy as np
+
+    ra = np.deg2rad(frame["ra"].to_numpy(dtype=float))
+    dec = np.deg2rad(frame["dec"].to_numpy(dtype=float))
+    cos_dec = np.cos(dec)
+    return np.column_stack((cos_dec * np.cos(ra), cos_dec * np.sin(ra), np.sin(dec)))
+
+
 def coordinate_exclusion_table(
     source: pd.DataFrame,
     benchmark_coordinates: Mapping[str, pd.DataFrame],
@@ -41,25 +51,19 @@ def coordinate_exclusion_table(
     import numpy as np
     from scipy.spatial import cKDTree
 
-    def unit_vectors(frame: pd.DataFrame) -> np.ndarray:
-        ra = np.deg2rad(frame["ra"].to_numpy(dtype=float))
-        dec = np.deg2rad(frame["dec"].to_numpy(dtype=float))
-        cos_dec = np.cos(dec)
-        return np.column_stack((cos_dec * np.cos(ra), cos_dec * np.sin(ra), np.sin(dec)))
-
     required_source = {"object_id", "ra", "dec"}
     if required_source - set(source.columns):
         raise ValueError("Source coordinate table requires object_id, ra, and dec")
     if radius_arcsec <= 0:
         raise ValueError("radius_arcsec must be positive")
-    source_vectors = unit_vectors(source)
+    source_vectors = _unit_vectors(source)
     records: List[Dict[str, object]] = []
     for name, benchmark in benchmark_coordinates.items():
         if {"ra", "dec"} - set(benchmark.columns):
             raise ValueError(f"Benchmark {name} requires ra and dec")
         if benchmark.empty:
             continue
-        chord_distance, _ = cKDTree(unit_vectors(benchmark)).query(source_vectors, k=1)
+        chord_distance, _ = cKDTree(_unit_vectors(benchmark)).query(source_vectors, k=1)
         angular_radians = 2.0 * np.arcsin(np.clip(chord_distance / 2.0, 0.0, 1.0))
         separation_arcsec = np.rad2deg(angular_radians) * 3600.0
         matched = separation_arcsec <= radius_arcsec
@@ -90,12 +94,6 @@ def coordinate_exclusion_coverage(
     import numpy as np
     from scipy.spatial import cKDTree
 
-    def unit_vectors(frame: pd.DataFrame) -> np.ndarray:
-        ra = np.deg2rad(frame["ra"].to_numpy(dtype=float))
-        dec = np.deg2rad(frame["dec"].to_numpy(dtype=float))
-        cos_dec = np.cos(dec)
-        return np.column_stack((cos_dec * np.cos(ra), cos_dec * np.sin(ra), np.sin(dec)))
-
     if {"object_id", "ra", "dec"} - set(source.columns):
         raise ValueError("Source coordinate table requires object_id, ra, and dec")
     if source.empty:
@@ -103,7 +101,7 @@ def coordinate_exclusion_coverage(
     if radius_arcsec <= 0:
         raise ValueError("radius_arcsec must be positive")
 
-    source_tree = cKDTree(unit_vectors(source))
+    source_tree = cKDTree(_unit_vectors(source))
     source_ids = source["object_id"].astype(str).to_numpy()
     records: List[Dict[str, object]] = []
     for name, benchmark in benchmark_coordinates.items():
@@ -111,7 +109,7 @@ def coordinate_exclusion_coverage(
             raise ValueError(f"Benchmark {name} requires ra and dec")
         if benchmark.empty:
             continue
-        chord_distance, source_indices = source_tree.query(unit_vectors(benchmark), k=1)
+        chord_distance, source_indices = source_tree.query(_unit_vectors(benchmark), k=1)
         angular_radians = 2.0 * np.arcsin(np.clip(chord_distance / 2.0, 0.0, 1.0))
         separations = np.rad2deg(angular_radians) * 3600.0
         benchmark_ids = (

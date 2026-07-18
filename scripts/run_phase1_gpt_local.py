@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,8 +11,10 @@ from typing import Any, Dict
 import pandas as pd
 from PIL import Image
 
+from aion_reimp.cache import sha256_text
 from aion_reimp.captioning import OpenRouterCaptioner, parse_caption_response
 from aion_reimp.config import load_config
+from aion_reimp.utils import append_jsonl, read_jsonl
 
 
 def _read_env_value(path: Path, name: str) -> str:
@@ -28,19 +29,6 @@ def _read_env_value(path: Path, name: str) -> str:
         if key.strip() == name:
             return value.strip().strip('"').strip("'")
     raise RuntimeError(f"{name} is absent from the environment and {path}")
-
-
-def _append_jsonl(path: Path, record: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, sort_keys=True) + "\n")
-        handle.flush()
-
-
-def _read_jsonl(path: Path) -> list[Dict[str, Any]]:
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
 def _estimated_cost(usage: Dict[str, Any], cost_config: Dict[str, Any]) -> float:
@@ -130,9 +118,9 @@ def main() -> None:
     errors_path = descriptions_path.with_name(descriptions_path.stem + "_errors.jsonl")
     if cost_path.exists():
         raise FileExistsError(f"Completed GPT cost artifact already exists: {cost_path}")
-    completed_records = _read_jsonl(descriptions_path)
+    completed_records = read_jsonl(descriptions_path, missing_ok=True)
     completed = {str(record["object_id"]) for record in completed_records}
-    usage_records = _read_jsonl(usage_path)
+    usage_records = read_jsonl(usage_path, missing_ok=True)
     if completed != {str(record["object_id"]) for record in usage_records}:
         raise ValueError("GPT description and usage resume sets differ")
     if completed - set(labels["object_id"].astype(str)):
@@ -166,7 +154,7 @@ def main() -> None:
             response, usage = captioner.generate_response_with_metadata(Path(row.image_path))
             result = parse_caption_response(object_id, response)
         except Exception as error:
-            _append_jsonl(
+            append_jsonl(
                 errors_path,
                 {
                     "object_id": object_id,
@@ -184,8 +172,8 @@ def main() -> None:
         total_completion_tokens += int(usage["completion_tokens"])
         if total_cost > float(cost_spec["hard_cap_usd"]):
             raise RuntimeError("Observed GPT cost exceeded the configured hard cap")
-        _append_jsonl(descriptions_path, result.as_record())
-        _append_jsonl(
+        append_jsonl(descriptions_path, result.as_record())
+        append_jsonl(
             usage_path,
             {"object_id": object_id, **usage, "effective_cost_usd": request_cost},
         )
@@ -205,7 +193,7 @@ def main() -> None:
                 "hard_cap_usd": float(cost_spec["hard_cap_usd"]),
                 "model_id": gpt["model_id"],
                 "provider": gpt["provider"],
-                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "prompt_sha256": sha256_text(prompt),
             },
             indent=2,
             sort_keys=True,

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from .utils import read_object_ids
+
 
 @dataclass(frozen=True)
 class CaptionResult:
@@ -191,8 +193,8 @@ def append_caption_results(
 
     output_jsonl = Path(output_jsonl)
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
-    completed = _read_object_ids(output_jsonl)
-    failed = _read_object_ids(Path(error_jsonl)) if error_jsonl is not None else set()
+    completed = read_object_ids(output_jsonl)
+    failed = read_object_ids(Path(error_jsonl)) if error_jsonl is not None else set()
     _validate_resume_sets(object_ids, completed, failed)
 
     error_budget = math.floor(len(row_list) * max_error_rate)
@@ -255,16 +257,6 @@ def append_caption_results(
         "error_rate": 0.0 if attempted == 0 else len(failed) / attempted,
         "max_error_rate": max_error_rate,
         "error_budget": error_budget,
-    }
-
-
-def _read_object_ids(path: Path) -> set[str]:
-    if not Path(path).exists():
-        return set()
-    return {
-        str(json.loads(line)["object_id"])
-        for line in Path(path).read_text(encoding="utf-8").splitlines()
-        if line.strip()
     }
 
 

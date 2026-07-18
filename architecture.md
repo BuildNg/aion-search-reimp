@@ -19,6 +19,7 @@ AION-Search/
   cluster/               Slurm scripts and dependency-chain submission
   scripts/               data preparation, cache generation, Slurm, sync, pull
   src/aion_reimp/        reusable pipeline code
+  src/spec_probes/        bounded Phase 6 frozen spectrum-encoder probes (see below)
   tests/                 identity, metric, model, and artifact contracts
   data/                  manifests and small metadata; no duplicated raw datasets
   results/               local pulled run artifacts; ignored
@@ -49,7 +50,10 @@ Only current runnable configs and launch helpers remain live. A completed run pr
 | `metrics.py` | sole graded nDCG and Recall@k implementations, aggregation, uncertainty helpers | model execution, dataset discovery |
 | `evaluate.py` | frozen benchmark orchestration and result tables | checkpoint or prompt selection |
 | `artifacts.py` | run directory lifecycle, atomic metadata writes, completeness checks | scientific calculations |
+| `smoke.py` | shared multi-condition caption/embedding-cache orchestration and common-set reduction for the smoke and pilot scripts | metric formulas, split derivation |
+| `launch_contract.py` | prerequisite-gate assembly and validation for launch contracts | run execution, metric policy |
 | `cli.py` | thin subcommands that connect modules | duplicate pipeline logic |
+| `utils.py` | small serialization, filesystem, and hash helpers (JSONL read/append, file hashing) | scientific calculations, config policy |
 
 If a module starts owning two unrelated scientific responsibilities, split it. Do not create interfaces merely because they might be useful later.
 
@@ -185,6 +189,7 @@ Each run writes `results/<run_id>/`:
 | `metrics.json` | aggregate metrics derived from ranked rows |
 | `tables.csv` | compact report-ready results |
 | `errors.jsonl` | structured failures or skipped rows, if any |
+| `predictions.parquet` | Phase 6 `spec_probes` only: row-level probe predictions per encoder/target/probe-family/split-seed; primary evidence, `metrics.json` must be recomputable from it |
 
 Caption and text-embedding generation are dataset-cache jobs rather than training runs. They follow the same resolved-config, input-fingerprint, status, error-log, and completeness conventions. Phase 1 writes both free-form description caches, schema-constrained judge outputs, calibration results, released path-overlap audits, secondary per-question audits, and one direct comparison. Both GPT-minus-Qwen deltas use paired object bootstraps and require no additional model call. Local GPT preparation additionally writes image-dimension preflight, per-request usage, and cost artifacts.
 
@@ -209,6 +214,45 @@ No GPU job or model/data download starts without approval and an ETA. Every laun
 
 When the user asks to stop for review, implementation ends after local code and tests but before GitHub push, cluster sync, or cluster execution. A local closed-API audit or query freeze still requires explicit approval even though it uses neither GPU nor shared cluster data.
 
+## Spectrum encoder probes
+
+Bounded review instrument, encoder-quality half only (decision 12): before any spectrum encoder enters the retrieval/training pipeline, `src/spec_probes/` benchmarks how well its frozen embeddings support recovery of physical labels. Redshift (spec-z) is live; DESI spectral class (SPECTYPE) is not a column the streamed `MultimodalUniverse/desi` sample carries at all, so that probe stays behind `labels.spectral_class.enabled: false` in config until a separate, not-yet-scoped DESI VAC crossmatch deliverable supplies it. The companion cross-match feasibility check (captioned objects x spectra, the wiki plan's Optional Phase 6 week-gate item 3) is the other half of the review and is delivered separately from this package. `src/spec_probes/` is a separate package from `src/aion_reimp/`, with its own config schema and zero import coupling to `aion_reimp.model` / `.training` / `.retrieval` / `.losses` / `.datasets`. It reuses `aion_reimp.utils`, `aion_reimp.artifacts`, and the generic object-level split/fingerprint helpers in `aion_reimp.manifest` (`split_fraction`, `manifest_fingerprint`) rather than re-deriving equivalent logic.
+
+| Module | Owns | Must not own |
+|---|---|---|
+| `spec_probes/config.py` | strict `phase6_probes` schema, unknown-key rejection | probe fitting, metric formulas |
+| `spec_probes/spectra_data.py` | probe sample selection, label extraction, spectrum-batch construction, object-level split + fingerprint | encoder-specific code, probe fitting |
+| `spec_probes/encoders.py` | three frozen encoder adapters behind one shared interface; model-specific code; device/batch/dtype policy | split/label logic, metric formulas |
+| `spec_probes/specformer_model.py` | vendored, frozen-inference-only SpecFormer architecture (source-cited) | training, encoder-selection logic |
+| `spec_probes/probes.py` | ridge/logistic/kNN fitting and prediction; fold-local standardization during CV; outer-train standardization for final fits; trivial baselines (pure) | metric formulas, file IO |
+| `spec_probes/probe_metrics.py` | NMAD, catastrophic-outlier fraction, MAE, R2, accuracy, macro-F1 (pure) | probe fitting, encoder code |
+| `spec_probes/run_probes.py` | per-encoder, per-split-seed probe orchestration, row-level predictions, metrics recomputed from predictions, seed aggregation | encoder-specific code, retrieval/training |
+
+A `--preflight` mode of `scripts/run_phase6_probes_cluster.py` streams and reports the first record's schema, repeats the seeded stream selection and requires identical ordered object IDs, loads both neural checkpoints, and encodes enough real rows to cover both the configured neural batch sizes and PCA component count. It requires the requested device, reports free GPU memory, and writes one report to the path named by `run.preflight_report` without creating a `results/<run_id>` directory. The report is bound to the exact resolved config, relevant code-file hashes, package versions, Python version, and device. `cluster/script_phase6_probes.sh` runs only this preflight; after manual review, `cluster/script_phase6_probes_full.sh` starts the full run. The full run refuses to create its run directory unless the bound report still matches and reports `status: "pass"`.
+
+```text
+MMU DESI streaming sample (ZWARN "no problem", probe-scale)
+  -> spectra_data.select_probe_sample / extract_labels / extract_spectrum_batch
+  -> per split.seeds entry: spectra_data.object_level_split (reuses
+     aion_reimp.manifest.split_fraction)
+     one seeded train/test split, fingerprinted, shared by every encoder
+     and both probe families within that split seed -- no per-encoder split drift
+
+frozen encoder (AION-1 | AstroCLIP SpecFormer | PCA baseline)
+  -> encoders.build_encoder -> SpectrumEncoderAdapter.fit (train split only,
+     no-op for the two pretrained encoders) / .embed (chunked, config device/batch/dtype)
+  -> per-encoder embeddings + fingerprint
+  -> probes.make_cv_folds (shared across encoders) + fold-local scaling for
+     alpha/C selection; final scaler fit on the complete outer train split
+  -> probes.select_ridge_alpha / select_logistic_c -> ridge_probe / logistic_probe /
+     knn_regression_probe / knn_classification_probe, plus probes.median_baseline_predict /
+     majority_class_baseline_predict (encoder-independent)
+  -> run_probes.run_probe_suite_for_encoder / run_baseline_suite
+  -> predictions.parquet (row-level, one split_seed column per row, primary evidence)
+  -> run_probes.metrics_from_predictions (per split seed) ->
+     run_probes.aggregate_seed_metrics (mean/std across split.seeds) -> metrics.json + tables.csv
+```
+
 ## Decisions that remain stable
 
 1. `orig_repo/` is reference-only; no new implementation is added inside it.
@@ -222,7 +266,7 @@ When the user asks to stop for review, implementation ends after local code and 
 9. Row-level rankings are primary evaluation evidence.
 10. Existing result directories are never silently mixed with retries.
 11. A new model arm requires a specific unresolved scientific question.
-12. Spectra code is not added until cross-match size and a spectra-sensitive evaluation pass review.
+12. Spectra code is not added to the retrieval/training pipeline until cross-match size and a spectra-sensitive evaluation pass review. That review has two halves, delivered separately: the frozen-encoder physical-recovery probes in `src/spec_probes/` (see "Spectrum encoder probes" below) are the encoder-quality half, and a captioned-objects x spectra cross-match feasibility check (the wiki plan's Optional Phase 6 week-gate item 3) is the other half. `src/spec_probes/` has no retrieval or training coupling.
 
 ## Change checklist
 

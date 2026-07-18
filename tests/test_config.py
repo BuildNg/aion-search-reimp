@@ -14,6 +14,55 @@ def test_current_configs_validate() -> None:
     assert load_config(ROOT / "configs" / "phase1.yaml")["kind"] == "phase1"
     assert load_config(ROOT / "configs" / "phase2_smoke.yaml")["kind"] == "phase2_smoke"
     assert load_config(ROOT / "configs" / "phase3_10k.yaml")["kind"] == "phase3_10k"
+    assert (
+        load_config(ROOT / "configs" / "phase3_10k_seedext.yaml")["kind"]
+        == "phase3_10k_seedext"
+    )
+
+
+def test_seedext_run_id_and_seeds_differ_from_base_pilot() -> None:
+    base = yaml.safe_load((ROOT / "configs" / "phase3_10k.yaml").read_text(encoding="utf-8"))
+    seedext = load_config(ROOT / "configs" / "phase3_10k_seedext.yaml")
+    assert seedext["run"]["id"] != base["run"]["id"]
+    assert seedext["run"]["seed"] == base["run"]["seed"]
+    assert set(seedext["seeds"]).isdisjoint(set(base["seeds"]))
+    assert seedext["source_run"]["run_id"] == base["run"]["id"]
+    assert set(seedext["source_run"]["reused_seeds"]) == set(base["seeds"])
+
+
+def test_seedext_requires_only_one_seed() -> None:
+    data = yaml.safe_load(
+        (ROOT / "configs" / "phase3_10k_seedext.yaml").read_text(encoding="utf-8")
+    )
+    data["seeds"] = [99]
+    assert validate_config(data)["seeds"] == [99]
+
+
+def test_seedext_rejects_seeds_that_overlap_the_reused_run() -> None:
+    data = yaml.safe_load(
+        (ROOT / "configs" / "phase3_10k_seedext.yaml").read_text(encoding="utf-8")
+    )
+    data["seeds"] = [45, 13]
+    with pytest.raises(ConfigError, match="must be disjoint from source_run.reused_seeds"):
+        validate_config(data)
+
+
+def test_seedext_requires_source_run_section() -> None:
+    data = yaml.safe_load(
+        (ROOT / "configs" / "phase3_10k_seedext.yaml").read_text(encoding="utf-8")
+    )
+    del data["source_run"]
+    with pytest.raises(ConfigError, match="Missing top-level keys"):
+        validate_config(data)
+
+
+def test_seedext_rejects_empty_seed_list() -> None:
+    data = yaml.safe_load(
+        (ROOT / "configs" / "phase3_10k_seedext.yaml").read_text(encoding="utf-8")
+    )
+    data["seeds"] = []
+    with pytest.raises(ConfigError, match="at least one seed"):
+        validate_config(data)
 
 
 def test_phase3_requires_ten_thousand_sample_size() -> None:

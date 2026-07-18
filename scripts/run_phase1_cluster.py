@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shlex
 import shutil
@@ -13,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from aion_reimp.artifacts import initialize_run, tracked_run
+from aion_reimp.cache import sha256_text
 from aion_reimp.caption_audit import (
     paired_accuracy_delta,
     paired_path_score_delta,
@@ -27,27 +27,11 @@ from aion_reimp.morphology import (
     calibration_metrics,
     resolve_schema,
 )
+from aion_reimp.utils import read_jsonl, sha256_file
 
 
 def _read_jsonl(path: Path) -> pd.DataFrame:
-    rows = [
-        json.loads(line)
-        for line in Path(path).read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    return pd.DataFrame(rows)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return pd.DataFrame(read_jsonl(path))
 
 
 def _description_stats(rows: pd.DataFrame) -> dict:
@@ -128,7 +112,7 @@ def main() -> None:
             enable_thinking=extractor_spec["enable_thinking"],
             schema_json=schema_json,
         )
-        actual_prompt_sha256 = _sha256_text(extractor.prompt_template)
+        actual_prompt_sha256 = sha256_text(extractor.prompt_template)
         if actual_prompt_sha256 != extractor_spec["prompt_sha256"]:
             raise RuntimeError("Released GalaxyBench judge prompt hash mismatch")
         calibration = calibration_metrics(
@@ -210,8 +194,8 @@ def main() -> None:
             ),
             "primary_metric": config["audit"]["primary_metric"],
             "secondary_metric": config["audit"]["secondary_metric"],
-            "caption_prompt_sha256": _sha256(caption_prompt_path),
-            "extractor_prompt_file_sha256": _sha256(extractor_prompt_path),
+            "caption_prompt_sha256": sha256_file(caption_prompt_path),
+            "extractor_prompt_file_sha256": sha256_file(extractor_prompt_path),
             "extractor_prompt_sha256": actual_prompt_sha256,
             "extractor_model": {
                 "model_id": extractor_spec["model_id"],
@@ -235,8 +219,8 @@ def main() -> None:
                 "gpt41mini": _description_stats(gpt_descriptions),
                 "qwen3vl_8b": _description_stats(qwen_descriptions),
             },
-            "gpt_source_sha256": _sha256(gpt_source),
-            "qwen_source_sha256": _sha256(qwen_source),
+            "gpt_source_sha256": sha256_file(gpt_source),
+            "qwen_source_sha256": sha256_file(qwen_source),
         }
         (output_root / "comparison.json").write_text(
             json.dumps(comparison, indent=2, sort_keys=True), encoding="utf-8"

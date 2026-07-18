@@ -1,0 +1,122 @@
+schema_version: 1
+kind: phase6_probes
+
+run:
+  id: phase6_probes_v1
+  output_root: results
+  seed: 20260717
+  # Config-declared device. The adapter helper can fall back to CPU for
+  # local unit fixtures, but cluster preflight requires the resolved device
+  # to equal this value and will not authorize a CPU fallback.
+  device: cuda
+  # The full run refuses to start unless this file records a pass for the
+  # exact current config, code hashes, package versions, and device.
+  preflight_report: preflight/phase6_probes_v1.json
+
+source_data:
+  repo_id: MultimodalUniverse/desi
+  # Verified 2026-07-18 against
+  # https://huggingface.co/datasets/MultimodalUniverse/desi (HF API `sha`).
+  revision: 933b9056b93b0f3e7790ee28c43412b49c39e232
+  split: train
+  streaming: true
+  sample_size: 10000
+  # Schema verified 2026-07-18 against the dataset card, the HF
+  # datasets-server first-rows API, and the MMU builder script
+  # (github.com/MultimodalUniverse/MultimodalUniverse, scripts/desi/desi.py):
+  # there is no TARGETID column and no SPECTYPE column. `object_id` *is*
+  # the DESI TARGETID (cast to string) -- see build_parent_sample.py line
+  # 151 (`catalog["object_id"] = catalog["TARGETID"]`) -- and flux/ivar/
+  # wavelength/mask arrive nested under one `spectrum` struct column, not
+  # as separate top-level columns. See spec_probes/spectra_data.py's module
+  # docstring for the full verified schema and the ZWARN boolean-inversion
+  # detail.
+  object_id_column: object_id
+  spectrum_column: spectrum
+  flux_field: flux
+  wave_field: lambda
+  ivar_field: ivar
+  mask_field: mask
+  redshift_column: Z
+  zwarn_column: ZWARN
+
+labels:
+  # MultimodalUniverse/desi's ZWARN is a boolean "no problem" flag (True
+  # iff the raw DESI ZWARN == 0); the raw bitmask is not recoverable, so 0
+  # is the only value this can mean (spec_probes.spectra_data._zwarn_is_good
+  # implements the translation; config.py rejects any other value).
+  zwarn_filter_value: 0
+  spectral_class:
+    # SPECTYPE is not present in the streamed MultimodalUniverse/desi
+    # records at all (verified 2026-07-18 -- no inline column, boolean or
+    # otherwise). Recovering it requires a DESI VAC crossmatch (e.g. the
+    # zall-pix-iron.fits redshift catalog, keyed by TARGETID == this
+    # dataset's object_id) that is a separate, not-yet-scoped deliverable --
+    # the wiki plan's Optional Phase 6 week-gate item 3 (captioned-objects
+    # x spectra cross-match feasibility check) is adjacent but distinct
+    # from this crossmatch. Until that deliverable lands, this must stay
+    # false and only the redshift probes run (config.py rejects `true`).
+    enabled: false
+    classes: [GALAXY, QSO, STAR]
+
+split:
+  train_ratio: 0.8
+  # Uncertainty (Finding 4d): the whole probe suite reruns once per split
+  # seed; run_probes.aggregate_seed_metrics reports mean/std across these
+  # runs, with each seed's row-level predictions kept as primary evidence.
+  seeds: [20260717, 20260718, 20260719]
+
+encoders:
+  - name: aion_spectrumcodec
+    kind: aion_spectrumcodec
+    package: aion
+    repo_id: polymathic-ai/aion-base
+    # Verified 2026-07-18 against https://huggingface.co/polymathic-ai/aion-base
+    # (HF API `sha`). Note (see encoders.py docstring): the frozen spectrum
+    # codec subfolder is loaded by the installed `aion` package without an
+    # independent revision pin, so pyproject.toml pins `polymathic-aion`
+    # itself for full reproducibility.
+    revision: 40541618104bab0fa85c8af68daeb867a720bb8c
+    output_dim: 768
+    pooling: mean
+    batch_size: 64
+    dtype: float32
+    num_encoder_tokens: 600
+  - name: astroclip_specformer
+    kind: astroclip_specformer
+    package: huggingface_hub
+    repo_id: polymathic-ai/specformer
+    # Verified 2026-07-18 against https://huggingface.co/polymathic-ai/specformer
+    # (HF API `sha`; file listing confirms a single specformer.ckpt, no
+    # config.json -- see encoders.py docstring for the corrected loading
+    # route and specformer_model.py for the vendored architecture).
+    revision: 160d67f0c07daf33d192568ca60ff38d76c39d66
+    # Corrected from an earlier, unverified 512: the checkpoint's own
+    # pretraining config (AstroCLIP's configs/specformer.yaml) declares
+    # embed_dim: 768, which is what SpecFormer.forward()["embedding"]
+    # actually produces.
+    output_dim: 768
+    pooling: mean
+    batch_size: 64
+    dtype: float32
+  - name: pca_baseline
+    kind: pca_baseline
+    n_components: 128
+    continuum_normalize: true
+    resample_n_pixels: 1024
+
+probes:
+  # Finding 4: fairness across encoders of very different representation
+  # scale (128/768/768-dim).
+  scaling: standardize  # Fold-train-only during CV; full outer-train-only for the selected final probes and kNN.
+  cv_folds: 5            # k-fold CV on the train split, identical fold indices reused across every encoder for a given split seed.
+  linear:
+    ridge_alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
+    logistic_c_grid: [0.01, 0.1, 1.0, 10.0, 100.0]
+    logistic_max_iter: 1000
+  knn:
+    k: 10
+    metric: cosine
+
+metrics:
+  catastrophic_outlier_threshold: 0.15
