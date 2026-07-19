@@ -141,7 +141,14 @@ def normalize_lsdb_matches(
             f"LSDB crossmatch output missing expected columns {sorted(missing)}; "
             f"available={sorted(frame.columns)}"
         )
-    normalized = frame.rename(columns=rename).loc[:, CANDIDATE_COLUMNS].copy()
+    # LSDB.compute() returns nested_pandas.NestedFrame, whose overridden
+    # ``to_parquet`` passes pandas' ``index=`` argument through to PyArrow
+    # and fails. Materialize an ordinary pandas DataFrame at this boundary;
+    # none of the selected columns is nested.
+    selected = frame.rename(columns=rename).loc[:, CANDIDATE_COLUMNS]
+    normalized = pd.DataFrame(
+        {column: selected[column].to_numpy(copy=True) for column in CANDIDATE_COLUMNS}
+    )
     normalized["caption_object_id"] = normalized["caption_object_id"].astype(str)
     normalized["desi_object_id"] = normalized["desi_object_id"].astype(str)
     normalized["separation_arcsec"] = pd.to_numeric(normalized["separation_arcsec"], errors="raise")

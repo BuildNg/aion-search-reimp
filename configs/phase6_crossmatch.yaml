@@ -2,9 +2,11 @@ schema_version: 1
 kind: phase6_crossmatch
 
 run:
-  id: phase6_crossmatch_probe_v1
+  # v1 completed the remote match but failed while writing LSDB's
+  # NestedFrame through pandas' index= argument; preserve that failed run.
+  id: phase6_crossmatch_probe_v2
   output_root: results
-  preflight_report: preflight/phase6_crossmatch_probe_v1.json
+  preflight_report: preflight/phase6_crossmatch_probe_v2.json
 
 captioned_source:
   # Reuse the exact completed Phase-3 population. Do not resample the Hub

@@ -67,7 +67,12 @@ def test_prepare_captioned_source_preserves_manifest_order_and_exact_population(
 
 
 def test_normalize_lsdb_matches_requires_explicit_suffix_contract() -> None:
-    raw = pd.DataFrame(
+    class NestedLikeFrame(pd.DataFrame):
+        @property
+        def _constructor(self):
+            return NestedLikeFrame
+
+    raw = NestedLikeFrame(
         {
             "caption_object_id_caption": ["a"],
             "caption_survey_caption": ["north"],
@@ -101,6 +106,7 @@ def test_normalize_lsdb_matches_requires_explicit_suffix_contract() -> None:
             "zwarn": "ZWARN",
         },
     )
+    assert type(normalized) is pd.DataFrame
     assert normalized.loc[0, "desi_object_id"] == "100"
     assert normalized.loc[0, "separation_arcsec"] == 0.05
 

@@ -41,7 +41,7 @@ python scripts/run_phase6_crossmatch_cluster.py --preflight
 python scripts/run_phase6_crossmatch_cluster.py
 ```
 
-The first command creates only `preflight/phase6_crossmatch_probe_v1.json`. The second refuses to create `results/phase6_crossmatch_probe_v1/` unless the exact preflight still passes. Neither command downloads spectrum arrays or loads a model.
+The first command creates only `preflight/phase6_crossmatch_probe_v2.json`. The second refuses to create `results/phase6_crossmatch_probe_v2/` unless the exact preflight still passes. Neither command downloads spectrum arrays or loads a model. Run ID `v1` is preserved as the first-cluster-contact failure: its remote match completed, but LSDB's `NestedFrame.to_parquet(index=False)` passed the pandas-only keyword to PyArrow; `v2` explicitly converts the flat result to a plain pandas frame first.
 
 ## Cluster location
 
