@@ -1,8 +1,10 @@
-"""Cluster entrypoint for the probe-scale Legacy-Survey × DESI crossmatch.
+"""Cluster entrypoint for the deterministic HSC × DESI scale crossmatch.
 
-The left side is the exact completed Phase-3 caption manifest. The right
-side is a pinned HATS conversion of MMU DESI EDR SV3, opened with LSDB and
-column-pruned before any partition is read. No spectrum arrays are loaded.
+The left side is an exact 18k HSC population selected from the pinned AION-Search
+source metadata. It retains the 3,602 HSC objects from the authoritative Phase-6
+feasibility run and adds a stable hash sample after the same benchmark exclusions.
+The right side is a pinned MMU DESI HATS catalog opened column-pruned through LSDB.
+No image, caption, embedding, spectrum array, or model weight is loaded.
 """
 
 from __future__ import annotations
@@ -15,29 +17,45 @@ import platform
 import shlex
 import sys
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Tuple
 
+import numpy as np
 import pandas as pd
-import yaml
 
 from aion_reimp.artifacts import initialize_run, tracked_run, write_json
+from aion_reimp.datasets import load_pinned_dataset
+from aion_reimp.manifest import (
+    assert_exclusion_coverage,
+    coordinate_exclusion_coverage,
+    exact_exclusion_coverage,
+)
 from spectra_crossmatch.config import load_config
 from spectra_crossmatch.crossmatch import (
     annotate_candidates,
     normalize_lsdb_matches,
-    prepare_captioned_source,
     select_nearest_valid,
     source_fingerprint,
     summarize_matches,
 )
+from spectra_crossmatch.source import SOURCE_COLUMNS, normalize_source_metadata, select_source_population
 
-PREFLIGHT_CONTRACT_VERSION = 1
+
+PREFLIGHT_CONTRACT_VERSION = 2
 PREFLIGHT_CODE_PATHS = (
     "scripts/run_phase6_crossmatch_cluster.py",
     "src/spectra_crossmatch/config.py",
+    "src/spectra_crossmatch/source.py",
     "src/spectra_crossmatch/crossmatch.py",
 )
-PREFLIGHT_DISTRIBUTIONS = ("huggingface-hub", "lsdb", "numpy", "pandas", "pyarrow")
+PREFLIGHT_DISTRIBUTIONS = (
+    "datasets",
+    "huggingface-hub",
+    "lsdb",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scipy",
+)
 
 
 def _fingerprint(value: Any) -> str:
@@ -69,65 +87,154 @@ def _preflight_contract(config: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _source_paths(config: Mapping[str, Any]) -> tuple[Path, Path, Path]:
-    spec = config["captioned_source"]
-    run_dir = Path(spec["run_dir"])
-    return run_dir, run_dir / spec["manifest_path"], run_dir / spec["source_rows_path"]
+def _verify_dataset_revision(repo_id: str, revision: str) -> str:
+    from huggingface_hub import HfApi
+
+    resolved = HfApi().dataset_info(repo_id, revision=revision).sha
+    if resolved != revision:
+        raise RuntimeError(
+            f"Resolved dataset revision {resolved!r} does not equal pin {revision!r} for {repo_id}"
+        )
+    return resolved
 
 
-def _load_captioned_source(config: Mapping[str, Any]) -> pd.DataFrame:
-    spec = config["captioned_source"]
-    run_dir, manifest_path, source_rows_path = _source_paths(config)
+def _load_anchor_ids(config: Mapping[str, Any]) -> set[str]:
+    source = config["source_population"]
+    anchor = source["anchor"]
+    run_dir = Path(anchor["run_dir"])
     status_path = run_dir / "run_status.json"
-    if not status_path.exists():
-        raise FileNotFoundError(f"Caption source run has no run_status.json: {status_path}")
-    status = json.loads(status_path.read_text(encoding="utf-8"))
-    if status.get("status") != "complete":
-        raise ValueError(f"Caption source run is not complete: status={status.get('status')!r}")
-    source_config_path = run_dir / "config.yaml"
-    if not source_config_path.exists():
-        raise FileNotFoundError(f"Caption source run has no resolved config: {source_config_path}")
-    source_config = yaml.safe_load(source_config_path.read_text(encoding="utf-8"))
-    resolved_run_id = source_config.get("run", {}).get("id") if isinstance(source_config, dict) else None
-    if resolved_run_id != spec["run_id"]:
-        raise ValueError(
-            f"Caption source run ID mismatch: config has {resolved_run_id!r}, "
-            f"crossmatch requires {spec['run_id']!r}"
-        )
-    if not manifest_path.exists() or not source_rows_path.exists():
-        raise FileNotFoundError(
-            f"Caption source artifacts missing: manifest={manifest_path.exists()}, "
-            f"source_rows={source_rows_path.exists()}"
-        )
+    summary_path = run_dir / "summary.json"
+    manifest_path = run_dir / anchor["manifest_path"]
+    for path in (status_path, summary_path, manifest_path):
+        if not path.exists():
+            raise FileNotFoundError(f"Anchor artifact missing: {path}")
 
-    object_id = spec["object_id_column"]
-    manifest = pd.read_parquet(manifest_path, columns=[object_id])
-    source_rows = pd.read_parquet(
-        source_rows_path,
-        columns=[
-            object_id,
-            spec["survey_column"],
-            spec["ra_column"],
-            spec["dec_column"],
-            spec["source_row_id_column"],
-        ],
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if status.get("status") != "complete" or summary.get("run_id") != anchor["run_id"]:
+        raise ValueError("Anchor crossmatch run is not the configured completed run")
+    if summary.get("captioned_source_fingerprint") != anchor["source_fingerprint"]:
+        raise ValueError("Anchor source fingerprint differs from the configured authoritative value")
+
+    manifest = pd.read_parquet(
+        manifest_path,
+        columns=[anchor["object_id_column"], anchor["survey_column"]],
     )
-    return prepare_captioned_source(
-        manifest,
-        source_rows,
-        expected_rows=int(spec["expected_rows"]),
-        object_id_column=object_id,
-        survey_column=spec["survey_column"],
-        ra_column=spec["ra_column"],
-        dec_column=spec["dec_column"],
-        source_row_id_column=spec["source_row_id_column"],
+    if len(manifest) != int(anchor["expected_manifest_rows"]):
+        raise ValueError(
+            f"Anchor manifest has {len(manifest)} rows; expected {anchor['expected_manifest_rows']}"
+        )
+    if manifest[anchor["object_id_column"]].astype(str).duplicated().any():
+        raise ValueError("Anchor manifest contains duplicate object IDs")
+    selected = manifest.loc[
+        manifest[anchor["survey_column"]].astype(str).eq(str(source["survey_value"])),
+        anchor["object_id_column"],
+    ].astype(str)
+    if len(selected) != int(anchor["expected_survey_rows"]):
+        raise ValueError(
+            f"Anchor has {len(selected)} {source['survey_value']!r} rows; "
+            f"expected {anchor['expected_survey_rows']}"
+        )
+    return set(selected)
+
+
+def _build_exclusion_coverage(
+    metadata: pd.DataFrame,
+    config: Mapping[str, Any],
+) -> pd.DataFrame:
+    spec = config["exclusions"]
+    canonical = metadata.rename(
+        columns={
+            "source_object_id": "object_id",
+            "source_ra": "ra",
+            "source_dec": "dec",
+        }
     )
+    screen = pd.read_parquet(Path(spec["caption_screen_labels"]), columns=["object_id"])
+    exact = exact_exclusion_coverage(
+        canonical["object_id"], "caption_screen_64", screen["object_id"]
+    )
+    benchmarks = {
+        name: pd.read_parquet(Path(path))
+        for name, path in spec["benchmark_coordinates"].items()
+    }
+    coordinate = coordinate_exclusion_coverage(
+        canonical,
+        benchmarks,
+        radius_arcsec=float(spec["radius_arcsec"]),
+    )
+    coverage = pd.concat([exact, coordinate], ignore_index=True)
+    assert_exclusion_coverage(
+        coverage,
+        expected_rows=len(screen) + sum(len(frame) for frame in benchmarks.values()),
+    )
+    return coverage
+
+
+def _load_source_population(
+    config: Mapping[str, Any],
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    spec = config["source_population"]
+    dataset = load_pinned_dataset(spec["repo_id"], spec["revision"], spec["split"])
+    requested = [
+        spec["object_id_column"],
+        spec["survey_column"],
+        spec["ra_column"],
+        spec["dec_column"],
+    ]
+    missing = set(requested) - set(dataset.column_names)
+    if missing:
+        raise ValueError(f"Pinned source dataset missing columns: {sorted(missing)}")
+    raw = dataset.select_columns(requested).to_pandas()
+    raw["_source_row_id"] = np.arange(len(raw), dtype=np.int64)
+    metadata = normalize_source_metadata(
+        raw,
+        columns={
+            "object_id": spec["object_id_column"],
+            "survey": spec["survey_column"],
+            "ra": spec["ra_column"],
+            "dec": spec["dec_column"],
+            "source_row_id": "_source_row_id",
+        },
+    )
+    coverage = _build_exclusion_coverage(metadata, config)
+    excluded_ids = set(
+        coverage.loc[coverage["status"].eq("matched"), "source_object_id"].astype(str)
+    )
+    anchor_ids = _load_anchor_ids(config)
+    selected = select_source_population(
+        metadata,
+        survey=str(spec["survey_value"]),
+        sample_size=int(spec["sample_size"]),
+        seed=int(spec["selection_seed"]),
+        salt=str(spec["selection_salt"]),
+        excluded_object_ids=excluded_ids,
+        anchor_object_ids=anchor_ids,
+    )
+    provenance = {
+        "repo_id": spec["repo_id"],
+        "revision": spec["revision"],
+        "split": spec["split"],
+        "dataset_rows": int(len(metadata)),
+        "survey": spec["survey_value"],
+        "survey_rows_before_exclusions": int(
+            metadata["source_survey"].eq(str(spec["survey_value"])).sum()
+        ),
+        "matched_exclusion_objects": int(len(excluded_ids)),
+        "anchor_rows": int(len(anchor_ids)),
+        "selected_rows": int(len(selected)),
+        "deterministic_expansion_rows": int(
+            selected["selection_reason"].eq("deterministic_hsc_expansion").sum()
+        ),
+        "selection_seed": int(spec["selection_seed"]),
+        "selection_salt": str(spec["selection_salt"]),
+        "fingerprint": source_fingerprint(selected),
+    }
+    return selected, coverage, provenance
 
 
 def _catalog_uri(config: Mapping[str, Any]) -> str:
     spec = config["desi_catalog"]
-    # Open the collection root, not only its main-catalog subdirectory, so
-    # LSDB also resolves the collection.properties-declared 10-arcsec margin.
     return f"hf://datasets/{spec['repo_id']}@{spec['revision']}"
 
 
@@ -154,11 +261,13 @@ def _normalize(frame: pd.DataFrame, config: Mapping[str, Any]) -> pd.DataFrame:
     return normalize_lsdb_matches(
         frame,
         source_columns={
-            "object_id": "caption_object_id",
-            "survey": "caption_survey",
-            "ra": "caption_ra",
-            "dec": "caption_dec",
-            "source_row_id": "caption_source_row_id",
+            "object_id": "source_object_id",
+            "survey": "source_survey",
+            "ra": "source_ra",
+            "dec": "source_dec",
+            "source_row_id": "source_row_id",
+            "selection_reason": "selection_reason",
+            "selection_rank": "selection_rank",
         },
         desi_columns={
             "object_id": desi["object_id_column"],
@@ -182,37 +291,34 @@ def _annotate(frame: pd.DataFrame, config: Mapping[str, Any]) -> pd.DataFrame:
 
 
 def run_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Validate exact local inputs and one real remote self-match without a run dir."""
+    """Bind the exact scale population and one real DESI self-match without a run dir."""
     report: Dict[str, Any] = {"status": "pass", "checks": {}}
     try:
         contract = _preflight_contract(config)
         report["contract"] = contract
         report["contract_fingerprint"] = _fingerprint(contract)
         missing_packages = [
-            name for name, version in contract["package_versions"].items() if version == "NOT_INSTALLED"
+            name for name, version in contract["package_versions"].items()
+            if version == "NOT_INSTALLED"
         ]
         if missing_packages:
             raise RuntimeError(f"Required packages not installed: {missing_packages}")
         report["checks"]["contract"] = {"ok": True}
 
-        source = _load_captioned_source(config)
-        report["checks"]["captioned_source"] = {
+        source_spec = config["source_population"]
+        source_revision = _verify_dataset_revision(
+            source_spec["repo_id"], source_spec["revision"]
+        )
+        source, coverage, provenance = _load_source_population(config)
+        report["checks"]["source_population"] = {
             "ok": True,
-            "rows": int(len(source)),
-            "fingerprint": source_fingerprint(source),
-            "surveys": {
-                str(key): int(value) for key, value in source["caption_survey"].value_counts().items()
-            },
+            **provenance,
+            "resolved_revision": source_revision,
+            "exclusion_coverage_rows": int(len(coverage)),
         }
 
-        from huggingface_hub import HfApi
-
         desi = config["desi_catalog"]
-        info = HfApi().dataset_info(desi["repo_id"], revision=desi["revision"])
-        if info.sha != desi["revision"]:
-            raise RuntimeError(
-                f"Resolved DESI revision {info.sha!r} does not equal config pin {desi['revision']!r}"
-            )
+        desi_revision = _verify_dataset_revision(desi["repo_id"], desi["revision"])
         catalog = _open_desi_catalog(config)
         missing = set(_desi_columns(config)) - set(catalog.columns)
         if missing:
@@ -221,22 +327,24 @@ def run_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
             raise RuntimeError("DESI HATS catalog has no loaded right-margin catalog")
 
         remote_row = catalog.head(1).iloc[0]
-        import lsdb
-
         synthetic_left = pd.DataFrame(
             {
-                "caption_object_id": ["preflight-self-match"],
-                "caption_survey": ["preflight"],
-                "caption_ra": [float(remote_row[desi["ra_column"]])],
-                "caption_dec": [float(remote_row[desi["dec_column"]])],
-                "caption_source_row_id": [-1],
+                "source_object_id": ["preflight-self-match"],
+                "source_survey": ["preflight"],
+                "source_ra": [float(remote_row[desi["ra_column"]])],
+                "source_dec": [float(remote_row[desi["dec_column"]])],
+                "source_row_id": [-1],
+                "selection_reason": ["preflight"],
+                "selection_rank": [-1],
             }
-        )
+        ).loc[:, SOURCE_COLUMNS]
+        import lsdb
+
         left_catalog = lsdb.from_dataframe(
             synthetic_left,
-            ra_column="caption_ra",
-            dec_column="caption_dec",
-            catalog_name="caption",
+            ra_column="source_ra",
+            dec_column="source_dec",
+            catalog_name="source",
             margin_threshold=max(config["crossmatch"]["radii_arcsec"]) + 1.0,
         )
         raw = left_catalog.crossmatch(
@@ -244,7 +352,7 @@ def run_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
             n_neighbors=1,
             radius_arcsec=0.1,
             require_right_margin=True,
-            suffixes=("_caption", "_desi"),
+            suffixes=("_source", "_desi"),
             suffix_method="all_columns",
             log_changes=False,
         ).compute()
@@ -262,46 +370,41 @@ def run_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
         report["checks"]["desi_catalog"] = {
             "ok": True,
             "repo_id": desi["repo_id"],
-            "revision": info.sha,
+            "revision": desi_revision,
             "catalog_uri": _catalog_uri(config),
             "columns": _desi_columns(config),
             "right_margin_loaded": catalog.margin is not None,
             "self_match_separation_arcsec": float(normalized.iloc[0]["separation_arcsec"]),
             "self_match_zwarn": bool(normalized.iloc[0]["desi_zwarn"]),
-            "self_match_quality_valid": bool(normalized.iloc[0]["is_valid_spectrum"]),
+            "self_match_quality_valid": True,
         }
-    except Exception as error:  # noqa: BLE001 - preflight must preserve the failure report
+    except Exception as error:  # noqa: BLE001 - preserve a complete failure report
         report["status"] = "fail"
         report["error_type"] = type(error).__name__
         report["error"] = str(error)
     return report
 
 
-def require_passing_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
+def require_passing_preflight(
+    config: Mapping[str, Any],
+) -> Tuple[Dict[str, Any], pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     report_path = Path(config["run"]["preflight_report"])
     if not report_path.exists():
         raise FileNotFoundError(f"Crossmatch preflight report missing: {report_path}")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if report.get("status") != "pass":
         raise RuntimeError(f"Crossmatch preflight did not pass: status={report.get('status')!r}")
-    current_fingerprint = _fingerprint(_preflight_contract(config))
-    if report.get("contract_fingerprint") != current_fingerprint:
-        raise RuntimeError("Crossmatch preflight is stale for the current config, code, or package versions")
-    current_source = _load_captioned_source(config)
-    current_source_fingerprint = source_fingerprint(current_source)
-    preflight_source_fingerprint = (
-        report.get("checks", {}).get("captioned_source", {}).get("fingerprint")
-    )
-    if preflight_source_fingerprint != current_source_fingerprint:
-        raise RuntimeError(
-            "Crossmatch preflight is stale for the completed Phase-3 captioned source artifacts"
-        )
-    return report
+    if report.get("contract_fingerprint") != _fingerprint(_preflight_contract(config)):
+        raise RuntimeError("Crossmatch preflight is stale for current config, code, or packages")
+    current_source, coverage, provenance = _load_source_population(config)
+    expected = report.get("checks", {}).get("source_population", {}).get("fingerprint")
+    if expected != source_fingerprint(current_source) or expected != provenance["fingerprint"]:
+        raise RuntimeError("Crossmatch preflight is stale for the selected source population")
+    return report, current_source, coverage, provenance
 
 
 def run_full(config: Mapping[str, Any]) -> Path:
-    preflight = require_passing_preflight(config)
-    source = _load_captioned_source(config)
+    preflight, source, coverage, source_provenance = require_passing_preflight(config)
     run_dir = initialize_run(
         Path(config["run"]["output_root"]),
         config["run"]["id"],
@@ -310,16 +413,18 @@ def run_full(config: Mapping[str, Any]) -> Path:
     )
     write_json(run_dir / "preflight_contract.json", preflight)
 
-    with tracked_run(run_dir, {"phase": 6, "condition": "captioned_legacy_x_desi_crossmatch"}):
+    with tracked_run(run_dir, {"phase": 6, "condition": "hsc_18k_x_desi_crossmatch"}):
         source.to_parquet(run_dir / "source_manifest.parquet", index=False)
+        coverage.to_parquet(run_dir / "exclusion_coverage.parquet", index=False)
+        write_json(run_dir / "source_provenance.json", source_provenance)
         catalog = _open_desi_catalog(config)
         import lsdb
 
         left_catalog = lsdb.from_dataframe(
             source,
-            ra_column="caption_ra",
-            dec_column="caption_dec",
-            catalog_name="caption",
+            ra_column="source_ra",
+            dec_column="source_dec",
+            catalog_name="source",
             margin_threshold=max(config["crossmatch"]["radii_arcsec"]) + 1.0,
         )
         raw = left_catalog.crossmatch(
@@ -327,39 +432,46 @@ def run_full(config: Mapping[str, Any]) -> Path:
             n_neighbors=int(config["crossmatch"]["max_neighbors"]),
             radius_arcsec=float(max(config["crossmatch"]["radii_arcsec"])),
             require_right_margin=bool(config["crossmatch"]["require_right_margin"]),
-            suffixes=("_caption", "_desi"),
+            suffixes=("_source", "_desi"),
             suffix_method="all_columns",
             log_changes=False,
         ).compute()
         candidates = _annotate(_normalize(raw, config), config)
         candidates.to_parquet(run_dir / "candidate_matches.parquet", index=False)
 
-        candidate_counts = candidates.groupby("caption_object_id").size()
+        candidate_counts = candidates.groupby("source_object_id").size()
         limit_hits = int((candidate_counts >= int(config["crossmatch"]["max_neighbors"])).sum())
         if limit_hits:
             raise RuntimeError(
-                f"{limit_hits} caption objects reached max_neighbors={config['crossmatch']['max_neighbors']}; "
+                f"{limit_hits} source objects reached max_neighbors={config['crossmatch']['max_neighbors']}; "
                 "candidate preservation may be truncated, so increase the cap and use a new run ID"
             )
 
-        max_radius = float(max(config["crossmatch"]["radii_arcsec"]))
-        selected = select_nearest_valid(candidates, max_radius)
+        primary_radius = float(config["crossmatch"]["primary_radius_arcsec"])
+        selected = select_nearest_valid(candidates, primary_radius)
         selected.to_parquet(run_dir / "selected_matches.parquet", index=False)
         by_radius, by_survey, summary = summarize_matches(
-            source, candidates, config["crossmatch"]["radii_arcsec"]
+            source,
+            candidates,
+            config["crossmatch"]["radii_arcsec"],
+            primary_radius,
         )
         by_radius.to_csv(run_dir / "counts_by_radius.csv", index=False)
         by_survey.to_csv(run_dir / "counts_by_survey.csv", index=False)
+        target = int(config["crossmatch"]["target_valid_matches"])
         write_json(
             run_dir / "summary.json",
             {
                 **summary,
                 "run_id": config["run"]["id"],
-                "captioned_source_run_id": config["captioned_source"]["run_id"],
-                "captioned_source_fingerprint": source_fingerprint(source),
+                "source_population_fingerprint": source_fingerprint(source),
+                "source_population": source_provenance,
                 "desi_repo_id": config["desi_catalog"]["repo_id"],
                 "desi_revision": config["desi_catalog"]["revision"],
                 "radii_arcsec": [float(value) for value in config["crossmatch"]["radii_arcsec"]],
+                "target_valid_matches": target,
+                "primary_valid_matches": int(len(selected)),
+                "target_met": bool(len(selected) >= target),
                 "max_neighbors": int(config["crossmatch"]["max_neighbors"]),
                 "candidate_limit_reached_objects": limit_hits,
                 "duplicate_policy": config["crossmatch"]["duplicate_policy"],
@@ -382,7 +494,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0 if report["status"] == "pass" else 1
     run_dir = run_full(config)
-    print(f"Crossmatch probe complete: {run_dir}")
+    print(f"Crossmatch scale run complete: {run_dir}")
     return 0
 
 

@@ -34,14 +34,14 @@ Local checks do not load model weights. The frozen Qwen3-VL and GPT-4.1-mini des
 
 When work is stopped for review, the gate is after local code and tests are ready but before any GitHub push, cluster sync, or cluster run. The reviewer should be able to inspect the exact prompt, queries, config, and proposed commands at that point.
 
-The Phase-6 crossmatch feasibility probe is prepared but review-gated. It reuses the completed Phase-3 10k caption manifest and queries only coordinate/redshift/quality columns from the pinned DESI HATS catalog:
+The active Phase-6 crossmatch scale run is review-gated. It expands the authoritative 3,602-row HSC feasibility subset to exactly 18,000 HSC coordinates from the same pinned image source, after the same benchmark exclusions. It queries only coordinate/redshift/quality columns from the pinned DESI HATS catalog:
 
 ```bash
 python scripts/run_phase6_crossmatch_cluster.py --preflight
 python scripts/run_phase6_crossmatch_cluster.py
 ```
 
-The first command creates only `preflight/phase6_crossmatch_probe_v3.json`. The second refuses to create `results/phase6_crossmatch_probe_v3/` unless the exact preflight still passes. Neither command downloads spectrum arrays or loads a model. Run ID `v1` is preserved as the first-cluster-contact write failure. Run ID `v2` completed and exposed a quality-contract mismatch: the pinned HATS catalog stores raw `ZWARN` semantics (`False` means zero warnings), while the streaming probe adapter uses an inverted "no problem" boolean. Run ID `v3` keeps those interfaces separate and makes preflight require a quality-valid self-match.
+The first command creates only `preflight/phase6_hsc_crossmatch_18k_v1.json`. The second refuses to create `results/phase6_hsc_crossmatch_18k_v1/` unless the exact source fingerprint and preflight contract still pass. Neither command loads images, captions, embeddings, spectrum arrays, or model weights. The selected-match artifact uses the locked 1-arcsecond radius; the summary reports whether at least 1,000 quality-valid pairs were found.
 
 ## Cluster location
 

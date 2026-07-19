@@ -2,28 +2,41 @@ schema_version: 1
 kind: phase6_crossmatch
 
 run:
-  # v1 failed while writing LSDB's NestedFrame. v2 completed, but exposed
-  # that this pinned HATS conversion stores raw ZWARN semantics (False == 0),
-  # unlike the streaming probe adapter's inverted "no problem" boolean.
-  # Preserve both earlier run directories and correct the contract in v3.
-  id: phase6_crossmatch_probe_v3
+  id: phase6_hsc_crossmatch_18k_v1
   output_root: results
-  preflight_report: preflight/phase6_crossmatch_probe_v3.json
+  preflight_report: preflight/phase6_hsc_crossmatch_18k_v1.json
 
-captioned_source:
-  # Reuse the exact completed Phase-3 population. Do not resample the Hub
-  # dataset: the question is how many of the objects already captioned for
-  # the controlled image experiment have valid DESI spectra.
-  run_dir: results/phase3_10k_v1
-  run_id: phase3_10k_v1
-  manifest_path: common_manifest.parquet
-  source_rows_path: data/source_rows.parquet
-  expected_rows: 10000
+source_population:
+  # Expand the authoritative feasibility population rather than discarding
+  # the 3,602 HSC objects already measured. Additions are a stable hash sample
+  # from the same pinned source after the same benchmark exclusions.
+  repo_id: astronolan/galaxy-descriptions
+  revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
+  split: default
+  sample_size: 18000
+  survey_value: hsc_pdr3_wide
+  selection_seed: 20260719
+  selection_salt: phase6_hsc_crossmatch_18k_v1
   object_id_column: object_id
   survey_column: survey
   ra_column: ra
   dec_column: dec
-  source_row_id_column: source_row_id
+  anchor:
+    run_dir: results/phase6_crossmatch_probe_v3
+    run_id: phase6_crossmatch_probe_v3
+    manifest_path: source_manifest.parquet
+    expected_manifest_rows: 10000
+    expected_survey_rows: 3602
+    source_fingerprint: 01c8eaf2e17231de7c4572b8e871191952fcb83293fdec7af34dae67851715be
+    object_id_column: caption_object_id
+    survey_column: caption_survey
+
+exclusions:
+  radius_arcsec: 1.0
+  caption_screen_labels: data/caption_screen_64/caption_screen_labels.parquet
+  benchmark_coordinates:
+    gz_decals: results/phase0_reference_v2/benchmark_coordinates/gz_decals_coordinates.parquet
+    lens: results/phase0_reference_v2/benchmark_coordinates/lens_coordinates.parquet
 
 desi_catalog:
   # HATS conversion of the same MMU DESI EDR SV3 source used by the encoder
@@ -43,6 +56,8 @@ crossmatch:
   # the preserved candidate rows. Eight neighbours makes truncation visible
   # without silently reducing every object to one match at source.
   radii_arcsec: [0.5, 1.0, 2.0, 3.0]
+  primary_radius_arcsec: 1.0
+  target_valid_matches: 1000
   max_neighbors: 8
   require_right_margin: true
   duplicate_policy: nearest_valid_then_desi_object_id

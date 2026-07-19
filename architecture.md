@@ -260,31 +260,35 @@ each encoder/split -> test-embedding fingerprint + reuse provenance
      run_probes.aggregate_seed_metrics (mean/std across split.seeds) -> metrics.json + tables.csv
 ```
 
-## Spectrum crossmatch feasibility probe
+## Spectrum crossmatch population scaling
 
-The other half of decision 12 is owned by `src/spectra_crossmatch/`, not by the encoder probe or retrieval packages. It reuses the exact completed Phase-3 caption manifest and its saved coordinates; it must not resample `astronolan/galaxy-descriptions`. The right side is the pinned `UniverseTBD/mmu_desi_edr_sv3` HATS catalog, opened through LSDB with only `object_id`, RA/Dec, `Z`, `ZERR`, and `ZWARN`. Spectrum arrays are never loaded for the feasibility count.
+The other half of decision 12 is owned by `src/spectra_crossmatch/`, not by the encoder probe or retrieval packages. After the exact 10k feasibility readout, the active config expands its 3,602 HSC objects to an exact 18,000-row HSC coordinate population from the same pinned `astronolan/galaxy-descriptions` revision. Selection happens before captioning: it retains the authoritative HSC anchor, reapplies the locked benchmark exclusions, and chooses additions by a stable object-ID hash. The right side remains the pinned `UniverseTBD/mmu_desi_edr_sv3` HATS catalog, opened through LSDB with only `object_id`, RA/Dec, `Z`, `ZERR`, and `ZWARN`. Images, captions, embeddings, and spectrum arrays are never loaded.
 
 | Module | Owns | Must not own |
 |---|---|---|
 | `spectra_crossmatch/config.py` | strict `phase6_crossmatch` schema and cross-field policy | network access, matching, output writing |
-| `spectra_crossmatch/crossmatch.py` | exact source binding, stable LSDB output normalization, spectrum-quality flags, duplicate ranking, radius/survey summaries | LSDB/HF calls, model code, retrieval design |
-| `scripts/run_phase6_crossmatch_cluster.py` | bound preflight, column-pruned LSDB execution, run artifacts | metric invention, model inference, caption generation |
+| `spectra_crossmatch/source.py` | canonical source schema, exact survey filtering, anchor-preserving deterministic selection | Hub access, exclusions I/O, LSDB calls |
+| `spectra_crossmatch/crossmatch.py` | stable LSDB output normalization, spectrum-quality flags, duplicate ranking, radius/survey summaries | source sampling, LSDB/HF calls, model code |
+| `scripts/run_phase6_crossmatch_cluster.py` | pinned source loading, exclusion coverage, anchor validation, bound preflight, column-pruned LSDB execution, run artifacts | metric invention, model inference, caption generation |
 
 ```text
-Phase-3 common_manifest.parquet + data/source_rows.parquet
-  -> exact 10k captioned object IDs + survey + RA/Dec (fingerprinted)
+pinned galaxy-descriptions metadata + locked benchmark exclusions
+  + authoritative v3 HSC anchor (3,602 rows)
+  -> source.select_source_population
+  -> exact 18,000 HSC object IDs + RA/Dec + source row IDs (fingerprinted)
   -> LSDB in-memory HATS left catalog
 
 pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
-  -> one 3-arcsec crossmatch, up to 8 candidates per caption object
+  -> one 3-arcsec crossmatch, up to 8 candidates per source object
   -> candidate_matches.parquet (all candidates; fail if the cap is reached)
         -> quality flag: HATS raw ZWARN False + finite Z >= 0 + finite ZERR > 0
   -> deterministic duplicate choice: separation, then DESI object_id
-  -> selected_matches.parquet + counts_by_radius.csv (0.5/1/2/3 arcsec)
+  -> selected_matches.parquet at the locked primary 1-arcsec radius
+     + counts_by_radius.csv (0.5/1/2/3 arcsec)
      + counts_by_survey.csv + summary.json
 ```
 
-`--preflight` binds the exact local Phase-3 artifacts, current config/code/package versions, pinned Hub revision, HATS schema, right-margin presence, and one real zero-distance DESI self-match. It writes no run directory. The full CPU-only job refuses to start from a failed or stale report.
+`--preflight` binds the source and DESI revisions, authoritative anchor, exclusion artifacts, exact 18k fingerprint, current config/code/package versions, HATS schema, right-margin presence, and one real quality-valid zero-distance DESI self-match. It writes no run directory. The full CPU-only job refuses to start from a failed or stale report. `summary.json` states whether the primary 1-arcsec selection reaches the configured target of 1,000 valid pairs.
 
 ## Decisions that remain stable
 

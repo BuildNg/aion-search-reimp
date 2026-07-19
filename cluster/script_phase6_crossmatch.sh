@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=astro-p6-xmatch
+#SBATCH --job-name=astro-p6-hsc18k
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -19,4 +19,3 @@ cd "$RUN_ROOT"
 # Submit only after reviewing the preflight report. The Python entrypoint
 # independently rejects a stale report before creating the run directory.
 "$ENV_ROOT/bin/python" -u scripts/run_phase6_crossmatch_cluster.py
-

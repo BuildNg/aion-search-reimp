@@ -38,12 +38,19 @@ def _require_commit(value: Any, field: str) -> None:
         raise CrossmatchConfigError(f"{field} must be a 40-character commit SHA, got {value!r}")
 
 
+def _require_sha256(value: Any, field: str) -> None:
+    text = str(value)
+    if len(text) != 64 or any(ch not in "0123456789abcdef" for ch in text.lower()):
+        raise CrossmatchConfigError(f"{field} must be a 64-character SHA-256, got {value!r}")
+
+
 def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
     top = {
         "schema_version",
         "kind",
         "run",
-        "captioned_source",
+        "source_population",
+        "exclusions",
         "desi_catalog",
         "crossmatch",
         "quality",
@@ -69,34 +76,83 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         raise CrossmatchConfigError("run.id and run.preflight_report must be non-empty")
     source = _section(
         data,
-        "captioned_source",
+        "source_population",
         {
-            "run_dir",
-            "run_id",
-            "manifest_path",
-            "source_rows_path",
-            "expected_rows",
+            "repo_id",
+            "revision",
+            "split",
+            "sample_size",
+            "survey_value",
+            "selection_seed",
+            "selection_salt",
             "object_id_column",
             "survey_column",
             "ra_column",
             "dec_column",
-            "source_row_id_column",
+            "anchor",
         },
         {
-            "run_dir",
-            "run_id",
-            "manifest_path",
-            "source_rows_path",
-            "expected_rows",
+            "repo_id",
+            "revision",
+            "split",
+            "sample_size",
+            "survey_value",
+            "selection_seed",
+            "selection_salt",
             "object_id_column",
             "survey_column",
             "ra_column",
             "dec_column",
-            "source_row_id_column",
+            "anchor",
         },
     )
-    if not isinstance(source["expected_rows"], int) or isinstance(source["expected_rows"], bool) or source["expected_rows"] <= 0:
-        raise CrossmatchConfigError("captioned_source.expected_rows must be a positive integer")
+    _require_commit(source["revision"], "source_population.revision")
+    if not isinstance(source["sample_size"], int) or isinstance(source["sample_size"], bool) or source["sample_size"] <= 0:
+        raise CrossmatchConfigError("source_population.sample_size must be a positive integer")
+    if not isinstance(source["selection_seed"], int) or isinstance(source["selection_seed"], bool):
+        raise CrossmatchConfigError("source_population.selection_seed must be an integer")
+    for key in ("repo_id", "split", "survey_value", "selection_salt"):
+        if not str(source[key]).strip():
+            raise CrossmatchConfigError(f"source_population.{key} must be non-empty")
+
+    anchor = source["anchor"]
+    if not isinstance(anchor, dict):
+        raise CrossmatchConfigError("source_population.anchor must be a mapping")
+    anchor_allowed = {
+        "run_dir",
+        "run_id",
+        "manifest_path",
+        "expected_manifest_rows",
+        "expected_survey_rows",
+        "source_fingerprint",
+        "object_id_column",
+        "survey_column",
+    }
+    unknown_anchor = sorted(set(anchor) - anchor_allowed)
+    missing_anchor = sorted(anchor_allowed - set(anchor))
+    if unknown_anchor:
+        raise CrossmatchConfigError(f"Unknown source_population.anchor keys: {unknown_anchor}")
+    if missing_anchor:
+        raise CrossmatchConfigError(f"Missing source_population.anchor keys: {missing_anchor}")
+    for key in ("expected_manifest_rows", "expected_survey_rows"):
+        if not isinstance(anchor[key], int) or isinstance(anchor[key], bool) or anchor[key] <= 0:
+            raise CrossmatchConfigError(f"source_population.anchor.{key} must be a positive integer")
+    if anchor["expected_survey_rows"] > source["sample_size"]:
+        raise CrossmatchConfigError(
+            "source_population.anchor.expected_survey_rows cannot exceed sample_size"
+        )
+    _require_sha256(anchor["source_fingerprint"], "source_population.anchor.source_fingerprint")
+
+    exclusions = _section(
+        data,
+        "exclusions",
+        {"radius_arcsec", "caption_screen_labels", "benchmark_coordinates"},
+        {"radius_arcsec", "caption_screen_labels", "benchmark_coordinates"},
+    )
+    if isinstance(exclusions["radius_arcsec"], bool) or not isinstance(exclusions["radius_arcsec"], (int, float)) or exclusions["radius_arcsec"] <= 0:
+        raise CrossmatchConfigError("exclusions.radius_arcsec must be positive")
+    if not isinstance(exclusions["benchmark_coordinates"], dict) or not exclusions["benchmark_coordinates"]:
+        raise CrossmatchConfigError("exclusions.benchmark_coordinates must be a non-empty mapping")
 
     desi = _section(
         data,
@@ -127,8 +183,22 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
     match = _section(
         data,
         "crossmatch",
-        {"radii_arcsec", "max_neighbors", "require_right_margin", "duplicate_policy"},
-        {"radii_arcsec", "max_neighbors", "require_right_margin", "duplicate_policy"},
+        {
+            "radii_arcsec",
+            "primary_radius_arcsec",
+            "target_valid_matches",
+            "max_neighbors",
+            "require_right_margin",
+            "duplicate_policy",
+        },
+        {
+            "radii_arcsec",
+            "primary_radius_arcsec",
+            "target_valid_matches",
+            "max_neighbors",
+            "require_right_margin",
+            "duplicate_policy",
+        },
     )
     radii = match["radii_arcsec"]
     if not isinstance(radii, list) or not radii:
@@ -137,6 +207,10 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         raise CrossmatchConfigError("crossmatch.radii_arcsec must contain positive numbers")
     if radii != sorted(set(radii)):
         raise CrossmatchConfigError("crossmatch.radii_arcsec must be sorted and unique")
+    if match["primary_radius_arcsec"] not in radii:
+        raise CrossmatchConfigError("crossmatch.primary_radius_arcsec must be in radii_arcsec")
+    if not isinstance(match["target_valid_matches"], int) or isinstance(match["target_valid_matches"], bool) or match["target_valid_matches"] <= 0:
+        raise CrossmatchConfigError("crossmatch.target_valid_matches must be a positive integer")
     if not isinstance(match["max_neighbors"], int) or isinstance(match["max_neighbors"], bool) or match["max_neighbors"] < 2:
         raise CrossmatchConfigError("crossmatch.max_neighbors must be an integer >= 2")
     if match["require_right_margin"] is not True:

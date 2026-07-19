@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=astro-p6-xmatch-pre
+#SBATCH --job-name=astro-p6-hsc18k-pre
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -17,4 +17,3 @@ unset OPENAI_API_KEY OPEN_ROUTER_KEY || true
 
 cd "$RUN_ROOT"
 "$ENV_ROOT/bin/python" -u scripts/run_phase6_crossmatch_cluster.py --preflight
-
