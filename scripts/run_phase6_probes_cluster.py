@@ -27,9 +27,11 @@ versions, Python version, and device.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import importlib.metadata
 import json
+import os
 import platform
 import shlex
 import sys
@@ -50,6 +52,7 @@ from spec_probes.run_probes import (
     embeddings_fingerprint,
     metrics_from_predictions,
     run_baseline_suite,
+    run_probe_suite,
     run_probe_suite_for_encoder,
     tables_from_metrics,
 )
@@ -77,6 +80,7 @@ PREFLIGHT_CODE_PATHS = (
 PREFLIGHT_DISTRIBUTIONS = (
     "datasets",
     "huggingface-hub",
+    "lightning",
     "numpy",
     "pandas",
     "polymathic-aion",
@@ -133,6 +137,16 @@ def _preflight_contract(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def _single_row_frame(row: Dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame([row])
+
+
+def _select_embedding_rows(
+    embeddings: np.ndarray,
+    row_by_object_id: Dict[str, int],
+    object_ids: List[str],
+) -> np.ndarray:
+    """Select cached full-sample embeddings in an explicit object-ID order."""
+    indices = np.asarray([row_by_object_id[object_id] for object_id in object_ids], dtype=np.int64)
+    return np.asarray(embeddings)[indices]
 
 
 def run_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -389,6 +403,38 @@ def run_full(config: Dict[str, Any]) -> None:
         split_summaries: Dict[str, Any] = {}
         split_assignment_frames: List[pd.DataFrame] = []
 
+        # The two pretrained encoders are frozen and split-independent. Embed
+        # the 10k sample exactly once per neural encoder, retain only the CPU
+        # arrays, and slice those arrays for every split seed. The previous
+        # orchestration rebuilt each model and re-embedded train/test rows for
+        # every seed (plus a second test pass for fingerprints), multiplying
+        # the dominant inference cost without changing any scientific input.
+        # PCA remains inside the split loop because its basis must be fit on
+        # each outer training split only.
+        frozen_neural_embeddings: Dict[str, Dict[str, Any]] = {}
+        for encoder_spec in config["encoders"]:
+            if encoder_spec["kind"] == "pca_baseline":
+                continue
+            encoder = build_encoder(encoder_spec, device=device)
+            encoder.fit(full_batch)  # no-op for frozen neural encoders
+            embeddings = encoder.embed(full_batch)
+            if embeddings.shape != (len(full_batch), encoder.output_dim):
+                raise ValueError(
+                    f"{encoder.name} full-sample embeddings have shape {embeddings.shape}, "
+                    f"expected {(len(full_batch), encoder.output_dim)}"
+                )
+            frozen_neural_embeddings[encoder.name] = {
+                "embeddings": embeddings,
+                "revision": encoder.revision,
+                "output_dim": encoder.output_dim,
+            }
+            del encoder
+            gc.collect()
+            if device == "cuda":
+                import torch
+
+                torch.cuda.empty_cache()
+
         for split_seed in config["split"]["seeds"]:
             split = object_level_split(
                 labels["object_id"], seed=int(split_seed), train_ratio=float(config["split"]["train_ratio"])
@@ -417,29 +463,65 @@ def run_full(config: Dict[str, Any]) -> None:
             )
 
             for encoder_spec in config["encoders"]:
-                encoder = build_encoder(encoder_spec, device=device)
-                predictions_frames.append(
-                    run_probe_suite_for_encoder(
-                        encoder,
-                        train_batch,
-                        test_batch,
-                        z_train,
-                        z_test,
-                        config["probes"],
-                        cv_folds,
-                        int(split_seed),
-                        seed=int(config["run"]["seed"]),
-                        spectype_train=spectype_train,
-                        spectype_test=spectype_test,
-                        spectype_classes=spectype_classes,
+                if encoder_spec["kind"] == "pca_baseline":
+                    encoder = build_encoder(encoder_spec, device=device)
+                    predictions_frames.append(
+                        run_probe_suite_for_encoder(
+                            encoder,
+                            train_batch,
+                            test_batch,
+                            z_train,
+                            z_test,
+                            config["probes"],
+                            cv_folds,
+                            int(split_seed),
+                            seed=int(config["run"]["seed"]),
+                            spectype_train=spectype_train,
+                            spectype_test=spectype_test,
+                            spectype_classes=spectype_classes,
+                        )
                     )
-                )
-                embeddings_test = encoder.embed(test_batch)
-                embeddings_fingerprints[f"{encoder.name}|{split_seed}"] = {
-                    "fingerprint": embeddings_fingerprint(list(test_batch.object_id), embeddings_test),
+                    embeddings_test = encoder.embed(test_batch)
+                    encoder_name = encoder.name
+                    encoder_revision = encoder.revision
+                    output_dim = encoder.output_dim
+                else:
+                    encoder_name = encoder_spec["name"]
+                    frozen = frozen_neural_embeddings[encoder_name]
+                    embeddings_train = _select_embedding_rows(
+                        frozen["embeddings"], batch_by_id, train_ids
+                    )
+                    embeddings_test = _select_embedding_rows(
+                        frozen["embeddings"], batch_by_id, test_ids
+                    )
+                    encoder_revision = frozen["revision"]
+                    output_dim = int(frozen["output_dim"])
+                    predictions_frames.append(
+                        run_probe_suite(
+                            encoder_name,
+                            encoder_revision,
+                            embeddings_train,
+                            embeddings_test,
+                            test_ids,
+                            z_train,
+                            z_test,
+                            config["probes"],
+                            cv_folds,
+                            int(split_seed),
+                            seed=int(config["run"]["seed"]),
+                            spectype_train=spectype_train,
+                            spectype_test=spectype_test,
+                            spectype_classes=spectype_classes,
+                        )
+                    )
+                embeddings_fingerprints[f"{encoder_name}|{split_seed}"] = {
+                    "fingerprint": embeddings_fingerprint(test_ids, embeddings_test),
                     "rows": int(embeddings_test.shape[0]),
-                    "output_dim": encoder.output_dim,
-                    "revision": encoder.revision,
+                    "output_dim": output_dim,
+                    "revision": encoder_revision,
+                    "embedding_reuse": (
+                        "full_sample_frozen_cache" if encoder_spec["kind"] != "pca_baseline" else "split_fitted_pca"
+                    ),
                 }
 
         write_json(output_root / "split_summaries.json", split_summaries)
@@ -461,7 +543,7 @@ def run_full(config: Dict[str, Any]) -> None:
         tables_from_metrics(aggregated_metrics).to_csv(output_root / "tables.csv", index=False)
 
 
-def main() -> None:
+def main() -> int:
     config_path = Path("configs/phase6_probes.yaml")
     config = load_config(config_path)
 
@@ -470,11 +552,32 @@ def main() -> None:
         report_path = _write_preflight_report(config, report)
         print(f"Preflight report written to {report_path}: status={report['status']}")
         if report["status"] != "pass":
-            sys.exit(1)
-        return
+            return 1
+        return 0
 
     run_full(config)
+    return 0
+
+
+def _flush_and_exit_successfully() -> None:
+    """Exit cleanly after every artifact/context manager has finished.
+
+    On THQL, the successful Phase-6 preflight wrote its passing report and
+    then CPython 3.11 aborted during third-party extension finalization with
+    ``PyGILState_Release: thread state ... must be current``.  ``os._exit``
+    intentionally skips only interpreter finalizers.  It is called solely
+    after ``main`` returns success, so files are already closed, tracked-run
+    status is complete, and stdout/stderr are flushed.  Exceptions and
+    explicit preflight failures keep the normal Python exit path and cannot
+    be converted into success by this workaround.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    exit_code = main()
+    if exit_code == 0:
+        _flush_and_exit_successfully()
+    raise SystemExit(exit_code)

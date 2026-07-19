@@ -31,12 +31,15 @@ fine-tunes it, per architecture.md's bounded-probe contract):
   its constructor arguments via ``self.save_hyperparameters()`` /
   ``self.hparams``. Depending on the ``lightning`` package just to load a
   frozen checkpoint's state dict would be a heavy, training-oriented
-  dependency for a probe package that never calls ``Trainer.fit``; this
-  port subclasses plain ``torch.nn.Module`` and stores the same
+  dependency at model-execution time for a probe package that never calls
+  ``Trainer.fit``; this port subclasses plain ``torch.nn.Module`` and stores the same
   constructor arguments as ordinary instance attributes instead. The
   state dict's parameter keys (``data_embed``, ``position_embed``,
   ``blocks``, ``final_layernorm``, ``head``) are unchanged, so
   ``load_state_dict`` against the upstream checkpoint still succeeds.
+  Lightning remains a cluster dependency solely because ``torch.load``
+  must import the checkpoint metadata's serialized
+  ``lightning.fabric.utilities.data.AttributeDict`` class.
 - ``training_step``, ``validation_step``, and ``mask_sequence`` (masked
   pretraining machinery) are omitted: this package never trains SpecFormer.
 """

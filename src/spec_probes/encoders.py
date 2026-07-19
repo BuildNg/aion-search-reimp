@@ -357,10 +357,10 @@ class AstroCLIPSpecFormerEncoder(SpectrumEncoderAdapter):
     repo) and its top-level ``astroclip.models`` package eagerly imports
     ``Moco_v2``/``astrodino`` machinery (pulling in ``dinov2`` and other
     image-model dependencies unrelated to this one encoder); vendoring the
-    ~250-line SpecFormer architecture keeps this package's dependency
-    footprint to ``torch`` + ``huggingface_hub``, which is more reliable to
-    install on a shared cluster environment than an unpublished git
-    dependency plus its full transitive image-model stack.
+    ~250-line SpecFormer architecture avoids the unpublished AstroCLIP git
+    dependency and its image-model stack. Lightning is still required to
+    deserialize the checkpoint's AttributeDict metadata, but it is never
+    used as a trainer or model base class here.
     """
 
     name: ClassVar[str] = "astroclip_specformer"
@@ -396,9 +396,10 @@ class AstroCLIPSpecFormerEncoder(SpectrumEncoderAdapter):
             repo_id=self._repo_id, filename="specformer.ckpt", revision=self.revision
         )
         # weights_only=False: the checkpoint's `hyper_parameters` entry is a
-        # plain dict (originally a lightning AttributeDict), not just
-        # tensors; this is the pinned, single-file, MIT-licensed checkpoint
-        # verified above, not an arbitrary untrusted download.
+        # Lightning AttributeDict rather than tensors only, so the pinned
+        # cluster environment includes Lightning for deserialization. This
+        # is the pinned, single-file, MIT-licensed checkpoint verified above,
+        # not an arbitrary untrusted download.
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         hyper_parameters = dict(checkpoint["hyper_parameters"])
         model = SpecFormer(**hyper_parameters)

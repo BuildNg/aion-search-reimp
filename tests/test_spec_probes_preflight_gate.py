@@ -16,6 +16,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from spec_probes.config import load_config
@@ -107,3 +108,17 @@ def test_write_preflight_report_overwrites_a_previous_attempt(tmp_path, script_m
     script_module._write_preflight_report(config, {"status": "fail", "checks": {}})
     report_path = script_module._write_preflight_report(config, {"status": "pass", "checks": {}})
     assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "pass"
+
+
+def test_success_exit_workaround_uses_zero_status(monkeypatch, script_module) -> None:
+    observed = []
+    monkeypatch.setattr(script_module.os, "_exit", observed.append)
+    script_module._flush_and_exit_successfully()
+    assert observed == [0]
+
+
+def test_cached_full_sample_embeddings_are_selected_in_requested_id_order(script_module) -> None:
+    embeddings = np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]], dtype=np.float32)
+    row_by_object_id = {"a": 0, "b": 1, "c": 2}
+    selected = script_module._select_embedding_rows(embeddings, row_by_object_id, ["c", "a"])
+    np.testing.assert_array_equal(selected, np.array([[3.0, 30.0], [1.0, 10.0]], dtype=np.float32))

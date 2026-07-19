@@ -34,6 +34,15 @@ Local checks do not load model weights. The frozen Qwen3-VL and GPT-4.1-mini des
 
 When work is stopped for review, the gate is after local code and tests are ready but before any GitHub push, cluster sync, or cluster run. The reviewer should be able to inspect the exact prompt, queries, config, and proposed commands at that point.
 
+The Phase-6 crossmatch feasibility probe is prepared but review-gated. It reuses the completed Phase-3 10k caption manifest and queries only coordinate/redshift/quality columns from the pinned DESI HATS catalog:
+
+```bash
+python scripts/run_phase6_crossmatch_cluster.py --preflight
+python scripts/run_phase6_crossmatch_cluster.py
+```
+
+The first command creates only `preflight/phase6_crossmatch_probe_v1.json`. The second refuses to create `results/phase6_crossmatch_probe_v1/` unless the exact preflight still passes. Neither command downloads spectrum arrays or loads a model.
+
 ## Cluster location
 
 - project: `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/AION-Search`

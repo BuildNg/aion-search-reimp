@@ -20,6 +20,7 @@ AION-Search/
   scripts/               data preparation, cache generation, Slurm, sync, pull
   src/aion_reimp/        reusable pipeline code
   src/spec_probes/        bounded Phase 6 frozen spectrum-encoder probes (see below)
+  src/spectra_crossmatch/ separate Phase 6 captioned-image × DESI feasibility probe
   tests/                 identity, metric, model, and artifact contracts
   data/                  manifests and small metadata; no duplicated raw datasets
   results/               local pulled run artifacts; ignored
@@ -238,10 +239,16 @@ MMU DESI streaming sample (ZWARN "no problem", probe-scale)
      one seeded train/test split, fingerprinted, shared by every encoder
      and both probe families within that split seed -- no per-encoder split drift
 
-frozen encoder (AION-1 | AstroCLIP SpecFormer | PCA baseline)
-  -> encoders.build_encoder -> SpectrumEncoderAdapter.fit (train split only,
-     no-op for the two pretrained encoders) / .embed (chunked, config device/batch/dtype)
-  -> per-encoder embeddings + fingerprint
+frozen neural encoder (AION-1 | AstroCLIP SpecFormer)
+  -> build/load once -> embed the full selected 10k sample once (chunked,
+     config device/batch/dtype) -> reuse row-aligned CPU embeddings across
+     every split seed; no repeated frozen inference caused by split choice
+
+PCA baseline
+  -> fit and embed separately inside each split seed because its basis is
+     outer-train-fitted and therefore split-dependent
+
+each encoder/split -> test-embedding fingerprint + reuse provenance
   -> probes.make_cv_folds (shared across encoders) + fold-local scaling for
      alpha/C selection; final scaler fit on the complete outer train split
   -> probes.select_ridge_alpha / select_logistic_c -> ridge_probe / logistic_probe /
@@ -252,6 +259,32 @@ frozen encoder (AION-1 | AstroCLIP SpecFormer | PCA baseline)
   -> run_probes.metrics_from_predictions (per split seed) ->
      run_probes.aggregate_seed_metrics (mean/std across split.seeds) -> metrics.json + tables.csv
 ```
+
+## Spectrum crossmatch feasibility probe
+
+The other half of decision 12 is owned by `src/spectra_crossmatch/`, not by the encoder probe or retrieval packages. It reuses the exact completed Phase-3 caption manifest and its saved coordinates; it must not resample `astronolan/galaxy-descriptions`. The right side is the pinned `UniverseTBD/mmu_desi_edr_sv3` HATS catalog, opened through LSDB with only `object_id`, RA/Dec, `Z`, `ZERR`, and `ZWARN`. Spectrum arrays are never loaded for the feasibility count.
+
+| Module | Owns | Must not own |
+|---|---|---|
+| `spectra_crossmatch/config.py` | strict `phase6_crossmatch` schema and cross-field policy | network access, matching, output writing |
+| `spectra_crossmatch/crossmatch.py` | exact source binding, stable LSDB output normalization, spectrum-quality flags, duplicate ranking, radius/survey summaries | LSDB/HF calls, model code, retrieval design |
+| `scripts/run_phase6_crossmatch_cluster.py` | bound preflight, column-pruned LSDB execution, run artifacts | metric invention, model inference, caption generation |
+
+```text
+Phase-3 common_manifest.parquet + data/source_rows.parquet
+  -> exact 10k captioned object IDs + survey + RA/Dec (fingerprinted)
+  -> LSDB in-memory HATS left catalog
+
+pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
+  -> one 3-arcsec crossmatch, up to 8 candidates per caption object
+  -> candidate_matches.parquet (all candidates; fail if the cap is reached)
+  -> quality flag: stored ZWARN True + finite Z >= 0 + finite ZERR > 0
+  -> deterministic duplicate choice: separation, then DESI object_id
+  -> selected_matches.parquet + counts_by_radius.csv (0.5/1/2/3 arcsec)
+     + counts_by_survey.csv + summary.json
+```
+
+`--preflight` binds the exact local Phase-3 artifacts, current config/code/package versions, pinned Hub revision, HATS schema, right-margin presence, and one real zero-distance DESI self-match. It writes no run directory. The full CPU-only job refuses to start from a failed or stale report.
 
 ## Decisions that remain stable
 

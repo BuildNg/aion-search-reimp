@@ -23,6 +23,12 @@ cluster = [
   "accelerate>=1.14",
   "datasets>=2.19",
   "huggingface-hub>=0.24",
+  # Required to deserialize the upstream SpecFormer checkpoint metadata,
+  # which stores hyperparameters as lightning.fabric AttributeDict.
+  "lightning==2.6.5",
+  # Phase-6 HATS crossmatch. This release requires Python >=3.11; it is
+  # loaded only in the THQL Python 3.11 environment, never by local tests.
+  "lsdb==0.9.2",
   "openai>=1.30",
   "Pillow>=10",
   "safetensors>=0.4",
@@ -31,9 +37,10 @@ cluster = [
   # spec_probes (Phase 6): AION-1 frozen encoder, pip name "polymathic-aion"
   # (import name `aion`), verified 2026-07-18 against
   # https://github.com/PolymathicAI/AION and https://pypi.org/project/polymathic-aion/
-  # (latest release 0.0.2). AstroCLIP SpecFormer needs no dedicated package --
-  # it is loaded via huggingface-hub (above) into the vendored architecture
-  # in src/spec_probes/specformer_model.py (see that module's docstring).
+  # (latest release 0.0.2). AstroCLIP SpecFormer is loaded via
+  # huggingface-hub into the vendored architecture in
+  # src/spec_probes/specformer_model.py; Lightning is needed only to
+  # deserialize the checkpoint's AttributeDict metadata.
   "polymathic-aion==0.0.2",
 ]
 test = ["pytest>=8"]
