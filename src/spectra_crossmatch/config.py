@@ -152,9 +152,10 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         {"zwarn_good_value", "minimum_redshift", "require_positive_redshift_error"},
         {"zwarn_good_value", "minimum_redshift", "require_positive_redshift_error"},
     )
-    if quality["zwarn_good_value"] is not True:
+    if quality["zwarn_good_value"] is not False:
         raise CrossmatchConfigError(
-            "quality.zwarn_good_value must be true: MMU stores True iff raw DESI ZWARN == 0"
+            "quality.zwarn_good_value must be false: the pinned HATS catalog stores "
+            "raw DESI ZWARN semantics, so False means integer ZWARN == 0"
         )
     if isinstance(quality["minimum_redshift"], bool) or not isinstance(quality["minimum_redshift"], (int, float)):
         raise CrossmatchConfigError("quality.minimum_redshift must be numeric")

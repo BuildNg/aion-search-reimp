@@ -29,7 +29,7 @@ CANDIDATE_COLUMNS = (
     "desi_dec",
     "desi_z",
     "desi_zerr",
-    "desi_zwarn_good",
+    "desi_zwarn",
     "separation_arcsec",
 )
 
@@ -132,7 +132,7 @@ def normalize_lsdb_matches(
         f"{desi_columns['dec']}_desi": "desi_dec",
         f"{desi_columns['redshift']}_desi": "desi_z",
         f"{desi_columns['redshift_error']}_desi": "desi_zerr",
-        f"{desi_columns['zwarn']}_desi": "desi_zwarn_good",
+        f"{desi_columns['zwarn']}_desi": "desi_zwarn",
         "_dist_arcsec": "separation_arcsec",
     }
     missing = set(rename) - set(frame)
@@ -169,13 +169,13 @@ def annotate_candidates(
     frame = candidates.copy()
     frame["desi_z"] = pd.to_numeric(frame["desi_z"], errors="coerce")
     frame["desi_zerr"] = pd.to_numeric(frame["desi_zerr"], errors="coerce")
-    frame["desi_zwarn_good"] = frame["desi_zwarn_good"].astype(bool)
+    frame["desi_zwarn"] = frame["desi_zwarn"].astype(bool)
 
     reasons: List[str] = []
     valid_values: List[bool] = []
     for row in frame.itertuples(index=False):
         row_reasons: List[str] = []
-        if bool(row.desi_zwarn_good) is not bool(zwarn_good_value):
+        if bool(row.desi_zwarn) is not bool(zwarn_good_value):
             row_reasons.append("zwarn_not_zero")
         if not np.isfinite(row.desi_z):
             row_reasons.append("redshift_nonfinite")

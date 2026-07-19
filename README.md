@@ -41,7 +41,7 @@ python scripts/run_phase6_crossmatch_cluster.py --preflight
 python scripts/run_phase6_crossmatch_cluster.py
 ```
 
-The first command creates only `preflight/phase6_crossmatch_probe_v2.json`. The second refuses to create `results/phase6_crossmatch_probe_v2/` unless the exact preflight still passes. Neither command downloads spectrum arrays or loads a model. Run ID `v1` is preserved as the first-cluster-contact failure: its remote match completed, but LSDB's `NestedFrame.to_parquet(index=False)` passed the pandas-only keyword to PyArrow; `v2` explicitly converts the flat result to a plain pandas frame first.
+The first command creates only `preflight/phase6_crossmatch_probe_v3.json`. The second refuses to create `results/phase6_crossmatch_probe_v3/` unless the exact preflight still passes. Neither command downloads spectrum arrays or loads a model. Run ID `v1` is preserved as the first-cluster-contact write failure. Run ID `v2` completed and exposed a quality-contract mismatch: the pinned HATS catalog stores raw `ZWARN` semantics (`False` means zero warnings), while the streaming probe adapter uses an inverted "no problem" boolean. Run ID `v3` keeps those interfaces separate and makes preflight require a quality-valid self-match.
 
 ## Cluster location
 

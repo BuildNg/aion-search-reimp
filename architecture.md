@@ -278,7 +278,7 @@ Phase-3 common_manifest.parquet + data/source_rows.parquet
 pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
   -> one 3-arcsec crossmatch, up to 8 candidates per caption object
   -> candidate_matches.parquet (all candidates; fail if the cap is reached)
-  -> quality flag: stored ZWARN True + finite Z >= 0 + finite ZERR > 0
+        -> quality flag: HATS raw ZWARN False + finite Z >= 0 + finite ZERR > 0
   -> deterministic duplicate choice: separation, then DESI object_id
   -> selected_matches.parquet + counts_by_radius.csv (0.5/1/2/3 arcsec)
      + counts_by_survey.csv + summary.json

@@ -251,6 +251,14 @@ def run_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
         normalized = _annotate(_normalize(raw, config), config)
         if len(normalized) != 1 or float(normalized.iloc[0]["separation_arcsec"]) > 1e-6:
             raise RuntimeError("Pinned DESI self-match did not return one zero-separation row")
+        if not bool(normalized.iloc[0]["is_valid_spectrum"]):
+            raise RuntimeError(
+                "Pinned DESI self-match failed the configured quality rule: "
+                f"ZWARN={normalized.iloc[0]['desi_zwarn']!r}, "
+                f"Z={normalized.iloc[0]['desi_z']!r}, "
+                f"ZERR={normalized.iloc[0]['desi_zerr']!r}, "
+                f"reason={normalized.iloc[0]['quality_exclusion_reason']!r}"
+            )
         report["checks"]["desi_catalog"] = {
             "ok": True,
             "repo_id": desi["repo_id"],
@@ -259,6 +267,7 @@ def run_preflight(config: Mapping[str, Any]) -> Dict[str, Any]:
             "columns": _desi_columns(config),
             "right_margin_loaded": catalog.margin is not None,
             "self_match_separation_arcsec": float(normalized.iloc[0]["separation_arcsec"]),
+            "self_match_zwarn": bool(normalized.iloc[0]["desi_zwarn"]),
             "self_match_quality_valid": bool(normalized.iloc[0]["is_valid_spectrum"]),
         }
     except Exception as error:  # noqa: BLE001 - preflight must preserve the failure report

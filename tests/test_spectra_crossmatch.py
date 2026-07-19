@@ -22,6 +22,7 @@ def test_crossmatch_config_is_strict_and_pinned() -> None:
     assert config["captioned_source"]["expected_rows"] == 10_000
     assert config["desi_catalog"]["revision"] == "9fd88ba48233cb9857701ce802a7eade2d4c4a88"
     assert config["crossmatch"]["radii_arcsec"] == [0.5, 1.0, 2.0, 3.0]
+    assert config["quality"]["zwarn_good_value"] is False
     broken = dict(config)
     broken["unused"] = True
     with pytest.raises(CrossmatchConfigError, match="Unknown top-level"):
@@ -84,7 +85,7 @@ def test_normalize_lsdb_matches_requires_explicit_suffix_contract() -> None:
             "dec_desi": [1.0],
             "Z_desi": [0.2],
             "ZERR_desi": [0.001],
-            "ZWARN_desi": [True],
+            "ZWARN_desi": [False],
             "_dist_arcsec": [0.05],
         }
     )
@@ -124,7 +125,7 @@ def _candidate_frame() -> pd.DataFrame:
             "desi_dec": [0.0, 0.0, 0.0, 1.0, 2.0],
             "desi_z": [0.2, 0.3, 0.4, 0.5, -0.1],
             "desi_zerr": [0.01, 0.01, 0.01, 0.02, 0.01],
-            "desi_zwarn_good": [False, True, True, True, True],
+            "desi_zwarn": [True, False, False, False, False],
             "separation_arcsec": [0.2, 0.4, 0.4, 0.8, 2.5],
         }
     )
@@ -133,7 +134,7 @@ def _candidate_frame() -> pd.DataFrame:
 def test_quality_duplicate_ranking_and_radius_summaries() -> None:
     annotated = annotate_candidates(
         _candidate_frame(),
-        zwarn_good_value=True,
+        zwarn_good_value=False,
         minimum_redshift=0.0,
         require_positive_redshift_error=True,
     )

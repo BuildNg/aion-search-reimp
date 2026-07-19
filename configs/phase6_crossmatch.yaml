@@ -2,11 +2,13 @@ schema_version: 1
 kind: phase6_crossmatch
 
 run:
-  # v1 completed the remote match but failed while writing LSDB's
-  # NestedFrame through pandas' index= argument; preserve that failed run.
-  id: phase6_crossmatch_probe_v2
+  # v1 failed while writing LSDB's NestedFrame. v2 completed, but exposed
+  # that this pinned HATS conversion stores raw ZWARN semantics (False == 0),
+  # unlike the streaming probe adapter's inverted "no problem" boolean.
+  # Preserve both earlier run directories and correct the contract in v3.
+  id: phase6_crossmatch_probe_v3
   output_root: results
-  preflight_report: preflight/phase6_crossmatch_probe_v2.json
+  preflight_report: preflight/phase6_crossmatch_probe_v3.json
 
 captioned_source:
   # Reuse the exact completed Phase-3 population. Do not resample the Hub
@@ -46,9 +48,11 @@ crossmatch:
   duplicate_policy: nearest_valid_then_desi_object_id
 
 quality:
-  # In the MMU builder, stored bool True means the original DESI ZWARN == 0.
+  # The pinned HATS catalog stores the raw DESI flag as bool: False means
+  # integer ZWARN == 0. This differs from the streaming probe adapter, which
+  # exposes an inverted "no problem" boolean. Keep the contracts separate.
   # Keep finite, non-negative redshift with a finite positive formal error.
   # Do not add a high-z or photometric cut before the match population is read.
-  zwarn_good_value: true
+  zwarn_good_value: false
   minimum_redshift: 0.0
   require_positive_redshift_error: true
