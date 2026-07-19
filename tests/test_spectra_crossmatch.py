@@ -9,6 +9,7 @@ from spectra_crossmatch.crossmatch import (
     normalize_lsdb_matches,
     prepare_captioned_source,
     select_nearest_valid,
+    source_fingerprint,
     summarize_matches,
 )
 
@@ -50,6 +51,7 @@ def test_prepare_captioned_source_preserves_manifest_order_and_exact_population(
     )
     assert prepared["caption_object_id"].tolist() == ["b", "a"]
     assert prepared["caption_ra"].tolist() == [20.0, 10.0]
+    assert source_fingerprint(prepared) == source_fingerprint(prepared.iloc[::-1])
 
     with pytest.raises(ValueError, match="manifest/source mismatch"):
         prepare_captioned_source(
@@ -154,4 +156,3 @@ def test_quality_duplicate_ranking_and_radius_summaries() -> None:
     assert one_arcsec["matched_valid_objects"] == 2
     assert summary["valid_candidate_rows_within_max_radius"] == 3
     assert set(by_survey["caption_survey"]) == {"north", "south"}
-

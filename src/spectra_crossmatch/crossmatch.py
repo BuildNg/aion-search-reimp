@@ -105,7 +105,13 @@ def source_fingerprint(source: pd.DataFrame) -> str:
     missing = set(SOURCE_COLUMNS) - set(source)
     if missing:
         raise ValueError(f"Caption source fingerprint missing columns: {sorted(missing)}")
-    return manifest_fingerprint(source.loc[:, SOURCE_COLUMNS])
+    # The shared dataset-agnostic helper uses ``object_id`` as its stable
+    # sort key. Adapt the crossmatch artifact's explicit left-side name at
+    # this boundary instead of reimplementing the hash algorithm.
+    canonical = source.loc[:, SOURCE_COLUMNS].rename(
+        columns={"caption_object_id": "object_id"}
+    )
+    return manifest_fingerprint(canonical)
 
 
 def normalize_lsdb_matches(
@@ -275,4 +281,3 @@ def summarize_matches(
         ),
     }
     return pd.DataFrame(overall_rows), pd.DataFrame(survey_rows), summary
-
