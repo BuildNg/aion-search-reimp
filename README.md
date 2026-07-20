@@ -43,6 +43,14 @@ python scripts/run_phase6_crossmatch_cluster.py
 
 The first command creates only `preflight/phase6_hsc_crossmatch_18k_v1.json`. The second refuses to create `results/phase6_hsc_crossmatch_18k_v1/` unless the exact source fingerprint and preflight contract still pass. Neither command loads images, captions, embeddings, spectrum arrays, or model weights. The selected-match artifact uses the locked 1-arcsecond radius; the summary reports whether at least 1,000 quality-valid pairs were found.
 
+The completed HSC scale crossmatch yielded 1,576 clean pairs. The paired redshift run freezes those exact rows and compares image-only, spectrum-only, and image+spectrum recovery. Preparation is CPU-only so the DESI stream scan does not occupy a GPU; analysis then reuses the existing AION spectrum adapter, deterministic splits, standardized ridge fitting, and spec-z metrics:
+
+```bash
+python scripts/run_phase6_paired_redshift_cluster.py preflight
+python scripts/run_phase6_paired_redshift_cluster.py prepare
+python scripts/run_phase6_paired_redshift_cluster.py analyze
+```
+
 ## Cluster location
 
 - project: `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/AION-Search`

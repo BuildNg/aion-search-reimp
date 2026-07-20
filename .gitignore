@@ -9,3 +9,4 @@ __pycache__/
 .coverage
 slurm-*.out
 logs/
+data/phase6_paired_redshift_v1/

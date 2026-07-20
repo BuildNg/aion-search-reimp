@@ -1,0 +1,72 @@
+schema_version: 1
+kind: phase6_paired_redshift
+
+run:
+  id: phase6_paired_redshift_v1
+  output_root: results
+  data_dir: data/phase6_paired_redshift_v1
+  seed: 20260720
+  device: cuda
+  preflight_report: preflight/phase6_paired_redshift_v1.json
+
+crossmatch:
+  selected_matches: results/phase6_hsc_crossmatch_18k_v1/selected_matches.parquet
+  expected_pairs: 1576
+
+image_source:
+  repo_id: astronolan/galaxy-descriptions
+  revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
+  split: default
+  object_id_column: object_id
+  embedding_column: aion_mean_embedding
+
+spectrum_source:
+  # The 1.126M-row HATS catalog is the full spectrum-bearing source. The
+  # smaller MultimodalUniverse/desi HF table used by the encoder probe has
+  # only ~100k rows and cannot supply all 1,576 matched TARGETIDs.
+  repo_id: UniverseTBD/mmu_desi_edr_sv3
+  revision: 9fd88ba48233cb9857701ce802a7eade2d4c4a88
+  catalog_path: mmu_desi_edr_sv3
+  object_id_column: object_id
+  spectrum_column: spectrum
+  flux_field: flux
+  wave_field: lambda
+  ivar_field: ivar
+  mask_field: mask
+  redshift_column: Z
+  zwarn_column: ZWARN
+  value_binding:
+    # Probe-validated source (phase6_probes encoder gate ran on this exact
+    # table/revision). Preflight requires one TARGETID shared with the HATS
+    # conversion and requires its flux/ivar/mask/wavelength values to agree,
+    # binding the new spectrum source to the validated one. This table's
+    # ZWARN is the inverted "no problem" boolean; the binding fetch does not
+    # filter on it.
+    repo_id: MultimodalUniverse/desi
+    revision: 933b9056b93b0f3e7790ee28c43412b49c39e232
+    split: train
+
+spectrum_encoder:
+  name: aion_spectrumcodec
+  kind: aion_spectrumcodec
+  repo_id: polymathic-ai/aion-base
+  revision: 40541618104bab0fa85c8af68daeb867a720bb8c
+  output_dim: 768
+  batch_size: 64
+  dtype: float32
+  num_encoder_tokens: 600
+
+split:
+  train_ratio: 0.8
+  seeds: [20260717, 20260718, 20260719]
+
+ridge:
+  cv_folds: 5
+  alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
+
+metrics:
+  catastrophic_outlier_threshold: 0.15
+  # Both comparisons run at both residual scales; one_plus_z is the
+  # preregistered primary (matches the NMAD/outlier convention), absolute
+  # |dz| is reported alongside.
+  paired_bootstrap_resamples: 10000
