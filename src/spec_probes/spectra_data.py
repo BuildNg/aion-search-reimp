@@ -317,12 +317,12 @@ def find_stream_target_ids(
     candidate_ids: Sequence[str],
     object_id_column: str,
 ) -> List[str]:
-    """Network-only: return the sorted candidate IDs present in a streamed table.
+    """Network-only: return the first candidate ID present in a streamed table.
 
     Scans the object-ID column alone (parquet column pruning keeps this
-    cheap), so it can cover the whole table without pulling spectrum arrays.
-    Used by the paired preflight to find an object shared between the HATS
-    conversion and the probe-validated MultimodalUniverse/desi table.
+    cheap), and stops at the first match because preflight needs only one
+    object shared between the HATS conversion and the probe-validated
+    MultimodalUniverse/desi table.
     """
     from datasets import load_dataset
 
@@ -336,6 +336,7 @@ def find_stream_target_ids(
         object_id = str(row[object_id_column])
         if object_id in candidates:
             found.add(object_id)
+            break
         if scanned % 100_000 == 0:
             print(f"Scanned {scanned:,} rows for binding overlap; found {len(found):,}", flush=True)
     return sorted(found)

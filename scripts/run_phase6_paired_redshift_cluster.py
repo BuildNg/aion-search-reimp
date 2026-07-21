@@ -34,7 +34,6 @@ from spec_probes.spectra_data import (
     assign_hats_partitions,
     extract_spectrum_batch,
     find_stream_target_ids,
-    hats_partition_path,
     load_hats_target_spectra,
     load_spectrum_batch,
     save_spectrum_batch,
@@ -152,10 +151,6 @@ def run_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
             dec_column="spectrum_dec",
         )
         unique_parts = assignments[["hats_order", "hats_pixel"]].drop_duplicates()
-        remote_bytes = 0
-        for row in unique_parts.itertuples(index=False):
-            relative = hats_partition_path(source["catalog_path"], row.hats_order, row.hats_pixel)
-            remote_bytes += int(fs.info(f"{repo_root}/{relative}")["size"])
 
         overlap_ids = find_stream_target_ids(
             binding["repo_id"], binding["revision"], binding["split"],
@@ -227,7 +222,6 @@ def run_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
                 "spectrum_revision": source["revision"],
                 "spectrum_catalog_path": source["catalog_path"],
                 "target_partitions": int(len(unique_parts)),
-                "target_partition_bytes": int(remote_bytes),
                 "binding_repo_id": binding["repo_id"],
                 "binding_revision": binding["revision"],
                 "binding_overlap_count": int(len(overlap_ids)),
