@@ -1,0 +1,28 @@
+schema_version: 1
+kind: phase6_prechecks
+
+run:
+  output_root: results
+
+inputs:
+  source_run_dir: results/phase6_paired_redshift_v1
+  paired_manifest: data/phase6_paired_redshift_v1/paired_manifest.parquet
+  expected_pairs: 1576
+
+alpha_sensitivity:
+  run_id: phase6_paired_redshift_alpha_sensitivity_v1
+  # Same folds, scalers, ridge implementation, seeds, and cached embeddings
+  # as the completed paired run; only the upper end of the grid changes.
+  alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0]
+
+galaxy_zoo:
+  run_id: phase6_galaxy_zoo_coverage_v1
+  # Public Galaxy Zoo DESI v1.0.1 friendly catalog. It contains model-
+  # predicted volunteer vote fractions and coordinates, but no images are read.
+  catalog_path: data/galaxy_zoo_desi/gz_desi_deep_learning_catalog_friendly.parquet
+  source_url: https://zenodo.org/records/8360385/files/gz_desi_deep_learning_catalog_friendly.parquet?download=1
+  source_md5: 114785d00c4d4f2208185bee73dd08b8
+  expected_catalog_rows: 8689370
+  match_radius_arcsec: 1.0
+  reliable_fraction_threshold: 0.8
+  redshift_bin_edges: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 1.0, 10.0]

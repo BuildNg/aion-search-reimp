@@ -10,3 +10,4 @@ __pycache__/
 slurm-*.out
 logs/
 data/phase6_paired_redshift_v1/
+data/galaxy_zoo_desi/

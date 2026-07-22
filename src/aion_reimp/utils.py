@@ -52,10 +52,15 @@ def read_object_ids(path: Path) -> Set[str]:
     }
 
 
-def sha256_file(path: Path) -> str:
-    """SHA-256 hex digest of a file's bytes, streamed in 1 MiB blocks."""
-    digest = hashlib.sha256()
+def file_digest(path: Path, algorithm: str = "sha256") -> str:
+    """Hex digest of a file's bytes, streamed in 1 MiB blocks."""
+    digest = hashlib.new(algorithm)
     with Path(path).open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    """SHA-256 hex digest of a file's bytes."""
+    return file_digest(path, "sha256")
