@@ -51,6 +51,20 @@ python scripts/run_phase6_paired_redshift_cluster.py prepare
 python scripts/run_phase6_paired_redshift_cluster.py analyze
 ```
 
+The two CPU-only checks before joint retrieval reuse that completed run:
+
+```bash
+python scripts/run_phase6_prechecks.py alpha-sensitivity
+python scripts/run_phase6_prechecks.py galaxy-zoo
+```
+
+The first command refits the saved embeddings with the wider ridge grid; it
+does no encoder inference. The second requires the checksum-pinned public
+Galaxy Zoo DESI friendly Parquet named in `configs/phase6_prechecks.yaml` at
+the configured local path. It reads only coordinates and required vote
+fractions, then writes coverage and redshift-support tables. Neither command
+trains or evaluates a retrieval model.
+
 ## Cluster location
 
 - project: `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/AION-Search`

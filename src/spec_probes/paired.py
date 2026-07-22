@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
 from .probes import apply_scaler, fit_scaler, make_cv_folds, ridge_probe, select_ridge_alpha
-from .run_probes import PREDICTIONS_COLUMNS, run_baseline_suite
+from .run_probes import (
+    PREDICTIONS_COLUMNS,
+    aggregate_seed_metrics,
+    metrics_from_predictions,
+    run_baseline_suite,
+    tables_from_metrics,
+)
 from .spectra_data import object_level_split
 
 
@@ -208,3 +214,70 @@ def paired_error_bootstrap(
         "ci_95_high": float(high),
         "decision": decision,
     }
+
+
+def paired_redshift_readout(
+    predictions: pd.DataFrame,
+    *,
+    alpha_grid: Sequence[float],
+    outlier_threshold: float,
+    bootstrap_resamples: int,
+    seed: int,
+) -> Tuple[Dict[str, Any], pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Build the shared metrics, paired CIs, and alpha-boundary table.
+
+    Both the original paired run and cached alpha sensitivity use this one
+    readout path, so changing the regularization grid cannot also change the
+    metric or bootstrap implementation.
+    """
+    if not alpha_grid:
+        raise ValueError("alpha_grid must not be empty")
+    per_seed = metrics_from_predictions(
+        predictions,
+        outlier_threshold=float(outlier_threshold),
+        spectype_classes=[],
+    )
+    aggregated = aggregate_seed_metrics(per_seed)
+    comparisons = {
+        "fusion_vs_image": ("image_only", "image_plus_spectrum"),
+        "fusion_vs_spectrum": ("spectrum_only", "image_plus_spectrum"),
+    }
+    bootstrap: Dict[str, Dict[str, Any]] = {}
+    bootstrap_rows = []
+    for offset, (comparison, (baseline, condition)) in enumerate(comparisons.items()):
+        bootstrap[comparison] = {}
+        for scale_offset, scale in enumerate(BOOTSTRAP_SCALES):
+            result = paired_error_bootstrap(
+                predictions,
+                baseline,
+                condition,
+                scale=scale,
+                n_resamples=int(bootstrap_resamples),
+                seed=int(seed) + 2 * offset + scale_offset,
+            )
+            result["comparison"] = comparison
+            result["is_primary"] = scale == "one_plus_z"
+            bootstrap[comparison][scale] = result
+            bootstrap_rows.append(result)
+
+    alpha_selection = predictions.loc[
+        predictions["probe_family"].eq("linear"),
+        ["encoder", "split_seed", "hyperparameter_value"],
+    ].drop_duplicates()
+    alpha_selection["at_grid_min"] = alpha_selection["hyperparameter_value"].eq(
+        min(alpha_grid)
+    )
+    alpha_selection["at_grid_max"] = alpha_selection["hyperparameter_value"].eq(
+        max(alpha_grid)
+    )
+    metrics = {
+        "per_seed": per_seed,
+        "aggregated": aggregated,
+        "paired_bootstrap": bootstrap,
+    }
+    return (
+        metrics,
+        tables_from_metrics(aggregated),
+        pd.DataFrame(bootstrap_rows),
+        alpha_selection,
+    )

@@ -18,16 +18,12 @@ from aion_reimp.datasets import load_pinned_dataset
 from aion_reimp.manifest import manifest_fingerprint
 from spec_probes.encoders import SpectrumBatch, build_encoder, resolve_device
 from spec_probes.paired import (
-    BOOTSTRAP_SCALES,
     build_paired_manifest,
-    paired_error_bootstrap,
+    paired_redshift_readout,
     run_paired_redshift_comparison,
 )
 from spec_probes.run_probes import (
-    aggregate_seed_metrics,
     embeddings_fingerprint,
-    metrics_from_predictions,
-    tables_from_metrics,
 )
 from spec_probes.spectra_data import (
     assert_spectrum_value_binding,
@@ -377,44 +373,16 @@ def analyze(config: Dict[str, Any]) -> None:
             image=image_embeddings,
             spectrum=spectrum_embeddings,
         )
-        per_seed = metrics_from_predictions(
+        metrics, tables, comparisons, alpha_selection = paired_redshift_readout(
             predictions,
+            alpha_grid=config["ridge"]["alpha_grid"],
             outlier_threshold=float(config["metrics"]["catastrophic_outlier_threshold"]),
-            spectype_classes=[],
+            bootstrap_resamples=int(config["metrics"]["paired_bootstrap_resamples"]),
+            seed=int(run["seed"]),
         )
-        aggregated = aggregate_seed_metrics(per_seed)
-        comparisons = {
-            "fusion_vs_image": ("image_only", "image_plus_spectrum"),
-            "fusion_vs_spectrum": ("spectrum_only", "image_plus_spectrum"),
-        }
-        bootstrap: Dict[str, Dict[str, Any]] = {}
-        bootstrap_rows = []
-        for offset, (comparison, (baseline, condition)) in enumerate(comparisons.items()):
-            bootstrap[comparison] = {}
-            for scale_offset, scale in enumerate(BOOTSTRAP_SCALES):
-                result = paired_error_bootstrap(
-                    predictions, baseline, condition,
-                    scale=scale,
-                    n_resamples=int(config["metrics"]["paired_bootstrap_resamples"]),
-                    seed=int(run["seed"]) + 2 * offset + scale_offset,
-                )
-                result["comparison"] = comparison
-                result["is_primary"] = scale == "one_plus_z"
-                bootstrap[comparison][scale] = result
-                bootstrap_rows.append(result)
-        write_json(
-            output_dir / "metrics.json",
-            {"per_seed": per_seed, "aggregated": aggregated, "paired_bootstrap": bootstrap},
-        )
-        tables_from_metrics(aggregated).to_csv(output_dir / "tables.csv", index=False)
-        pd.DataFrame(bootstrap_rows).to_csv(output_dir / "paired_comparisons.csv", index=False)
-        alpha_grid = config["ridge"]["alpha_grid"]
-        alpha_selection = predictions.loc[
-            predictions["probe_family"].eq("linear"),
-            ["encoder", "split_seed", "hyperparameter_value"],
-        ].drop_duplicates()
-        alpha_selection["at_grid_min"] = alpha_selection["hyperparameter_value"].eq(min(alpha_grid))
-        alpha_selection["at_grid_max"] = alpha_selection["hyperparameter_value"].eq(max(alpha_grid))
+        write_json(output_dir / "metrics.json", metrics)
+        tables.to_csv(output_dir / "tables.csv", index=False)
+        comparisons.to_csv(output_dir / "paired_comparisons.csv", index=False)
         alpha_selection.to_csv(output_dir / "alpha_selection.csv", index=False)
         write_json(output_dir / "redshift_distribution.json", data_summary["redshift_distribution"])
         write_json(

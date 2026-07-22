@@ -6,6 +6,7 @@ from spec_probes.encoders import SpectrumBatch
 from spec_probes.paired import (
     build_paired_manifest,
     paired_error_bootstrap,
+    paired_redshift_readout,
     run_paired_redshift_comparison,
 )
 from spec_probes.spectra_data import (
@@ -75,6 +76,18 @@ def test_paired_comparison_reuses_test_objects_across_conditions():
         test_sets = [set(values) for _, values in groups]
         assert all(values == test_sets[0] for values in test_sets[1:])
     assert len(splits) == 2 * n
+
+    metrics, tables, comparisons, alpha_selection = paired_redshift_readout(
+        predictions,
+        alpha_grid=[0.1, 1.0],
+        outlier_threshold=0.15,
+        bootstrap_resamples=100,
+        seed=5,
+    )
+    assert "fusion_vs_spectrum" in metrics["paired_bootstrap"]
+    assert set(tables["encoder"]) == set(predictions["encoder"])
+    assert set(comparisons["scale"]) == {"one_plus_z", "absolute"}
+    assert not alpha_selection.empty
 
     comparison = paired_error_bootstrap(
         predictions,
