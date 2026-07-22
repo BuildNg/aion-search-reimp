@@ -151,6 +151,7 @@ def _load_anchor_ids(config: Mapping[str, Any]) -> set[str]:
 def _load_morphology_priority_ids(
     metadata: pd.DataFrame,
     excluded_ids: set[str],
+    anchor_ids: set[str],
     config: Mapping[str, Any],
 ) -> Tuple[list[str], Dict[str, Any]]:
     source = config["source_population"]
@@ -192,6 +193,7 @@ def _load_morphology_priority_ids(
         catalog,
         radius_arcsec=float(spec["match_radius_arcsec"]),
     )
+    matched = matched.drop(columns="z")
     raw_match_rows = len(matched)
     duplicated = matched["galaxy_zoo_dr8_id"].duplicated(keep=False)
     duplicate_ids = int(matched.loc[duplicated, "galaxy_zoo_dr8_id"].nunique())
@@ -232,6 +234,17 @@ def _load_morphology_priority_ids(
     priority_ids = priority["object_id"].astype(str).tolist()
     if not priority_ids:
         raise ValueError("Morphology targeting found no eligible priority objects")
+    if len(priority_ids) != int(spec["expected_priority_objects"]):
+        raise ValueError(
+            f"Morphology targeting found {len(priority_ids)} priority objects; "
+            f"expected {spec['expected_priority_objects']}"
+        )
+    priority_additions = len(set(priority_ids) - anchor_ids)
+    if priority_additions != int(spec["expected_priority_additions"]):
+        raise ValueError(
+            f"Morphology targeting found {priority_additions} priority additions outside "
+            f"the anchor; expected {spec['expected_priority_additions']}"
+        )
     return priority_ids, {
         "enabled": True,
         "catalog_path": str(catalog_path),
@@ -248,6 +261,7 @@ def _load_morphology_priority_ids(
         "reliable_counts": reliable_counts,
         "exclusive_priority_counts": exclusive_counts,
         "priority_objects": int(len(priority_ids)),
+        "priority_additions_outside_anchor": int(priority_additions),
     }
 
 
@@ -316,7 +330,7 @@ def _load_source_population(
     )
     anchor_ids = _load_anchor_ids(config)
     priority_ids, priority_provenance = _load_morphology_priority_ids(
-        metadata, excluded_ids, config
+        metadata, excluded_ids, anchor_ids, config
     )
     selected = select_source_population(
         metadata,

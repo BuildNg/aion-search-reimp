@@ -168,6 +168,8 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             "match_radius_arcsec",
             "reliable_fraction_threshold",
             "labels",
+            "expected_priority_objects",
+            "expected_priority_additions",
         }
         unknown_morphology = sorted(set(morphology) - morphology_keys)
         missing_morphology = sorted(morphology_keys - set(morphology))
@@ -229,6 +231,25 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             raise CrossmatchConfigError(
                 "source_population.morphology_priority.labels must be a non-empty "
                 "unique list of supported morphology labels"
+            )
+        for key in ("expected_priority_objects", "expected_priority_additions"):
+            value = morphology[key]
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise CrossmatchConfigError(
+                    f"source_population.morphology_priority.{key} must be positive"
+                )
+        if morphology["expected_priority_additions"] > morphology["expected_priority_objects"]:
+            raise CrossmatchConfigError(
+                "source_population.morphology_priority.expected_priority_additions "
+                "cannot exceed expected_priority_objects"
+            )
+        expected_size = (
+            anchor["expected_survey_rows"] + morphology["expected_priority_additions"]
+        )
+        if source["sample_size"] != expected_size:
+            raise CrossmatchConfigError(
+                "source_population.sample_size must equal anchor expected_survey_rows plus "
+                "morphology_priority.expected_priority_additions"
             )
 
     exclusions = _section(

@@ -2,20 +2,21 @@ schema_version: 1
 kind: phase6_crossmatch
 
 run:
-  id: phase6_hsc_crossmatch_morphology_25k_v1
+  id: phase6_hsc_crossmatch_morphology_v1
   output_root: results
-  preflight_report: preflight/phase6_hsc_crossmatch_morphology_25k_v1.json
+  preflight_report: preflight/phase6_hsc_crossmatch_morphology_v1.json
 
 source_population:
   repo_id: astronolan/galaxy-descriptions
   revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
   split: default
-  # Preserve the completed 18k population, then add up to 7k rows with rare
-  # morphology candidates first and deterministic HSC fill only if needed.
-  sample_size: 25000
+  # Full pinned-data audit: 3,394 reliable morphology objects, of which 657
+  # are already in the 18k anchor. Add every remaining candidate and no
+  # unrelated hash fill: 18,000 + 2,737 = 20,737.
+  sample_size: 20737
   survey_value: hsc_pdr3_wide
   selection_seed: 20260722
-  selection_salt: phase6_hsc_crossmatch_morphology_25k_v1
+  selection_salt: phase6_hsc_crossmatch_morphology_v1
   object_id_column: object_id
   survey_column: survey
   ra_column: ra
@@ -38,7 +39,9 @@ source_population:
     expected_catalog_rows: 8689370
     match_radius_arcsec: 1.0
     reliable_fraction_threshold: 0.7
-    # Earlier entries win if the 7k expansion capacity is reached.
+    expected_priority_objects: 3394
+    expected_priority_additions: 2737
+    # Every candidate fits; ordering only makes any future capped revision explicit.
     labels: [barred_spiral, edge_on_disk, spiral, featured_or_disk]
 
 exclusions:
@@ -61,7 +64,7 @@ desi_catalog:
 crossmatch:
   radii_arcsec: [0.5, 1.0, 2.0, 3.0]
   primary_radius_arcsec: 1.0
-  target_valid_matches: 1800
+  target_valid_matches: 1650
   max_neighbors: 8
   require_right_margin: true
   duplicate_policy: nearest_valid_then_desi_object_id

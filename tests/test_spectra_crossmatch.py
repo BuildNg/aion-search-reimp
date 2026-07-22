@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from spectra_crossmatch.config import CrossmatchConfigError, load_config, validate_config
 from spectra_crossmatch.crossmatch import (
@@ -31,13 +32,22 @@ def test_crossmatch_config_is_strict_and_pinned() -> None:
         validate_config(broken)
 
     targeted = load_config(ROOT / "configs" / "phase6_crossmatch_morphology.yaml")
-    assert targeted["source_population"]["sample_size"] == 25_000
+    assert targeted["source_population"]["sample_size"] == 20_737
     assert targeted["source_population"]["anchor"]["expected_survey_rows"] == 18_000
     assert (
         targeted["source_population"]["morphology_priority"][
             "reliable_fraction_threshold"
         ]
         == 0.7
+    )
+    prechecks = yaml.safe_load(
+        (ROOT / "configs" / "phase6_prechecks.yaml").read_text(encoding="utf-8")
+    )
+    assert (
+        targeted["source_population"]["morphology_priority"][
+            "reliable_fraction_threshold"
+        ]
+        == prechecks["galaxy_zoo"]["reliable_fraction_threshold"]
     )
 
 
