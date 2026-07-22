@@ -588,7 +588,7 @@ def run_full(config: Mapping[str, Any]) -> Path:
         primary_radius = float(config["crossmatch"]["primary_radius_arcsec"])
         selected = select_nearest_valid(candidates, primary_radius)
         selected.to_parquet(run_dir / "selected_matches.parquet", index=False)
-        by_radius, by_survey, summary = summarize_matches(
+        by_radius, by_survey, by_selection_reason, summary = summarize_matches(
             source,
             candidates,
             config["crossmatch"]["radii_arcsec"],
@@ -596,6 +596,9 @@ def run_full(config: Mapping[str, Any]) -> Path:
         )
         by_radius.to_csv(run_dir / "counts_by_radius.csv", index=False)
         by_survey.to_csv(run_dir / "counts_by_survey.csv", index=False)
+        by_selection_reason.to_csv(
+            run_dir / "counts_by_selection_reason.csv", index=False
+        )
         target = int(config["crossmatch"]["target_valid_matches"])
         write_json(
             run_dir / "summary.json",

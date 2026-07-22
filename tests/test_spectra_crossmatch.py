@@ -204,7 +204,7 @@ def _candidate_frame() -> pd.DataFrame:
             "source_ra": [10.0, 10.0, 10.0, 20.0, 30.0],
             "source_dec": [0.0, 0.0, 0.0, 1.0, 2.0],
             "source_row_id": [1, 1, 1, 2, 3],
-            "selection_reason": ["test"] * 5,
+            "selection_reason": ["anchor"] * 3 + ["morphology_priority"] * 2,
             "selection_rank": [0, 0, 0, 1, 2],
             "desi_object_id": ["bad", "200", "100", "300", "400"],
             "desi_ra": [10.0, 10.0, 10.0, 20.0, 30.0],
@@ -238,11 +238,11 @@ def test_quality_duplicate_ranking_and_radius_summaries() -> None:
             "source_ra": [10.0, 20.0, 30.0],
             "source_dec": [0.0, 1.0, 2.0],
             "source_row_id": [1, 2, 3],
-            "selection_reason": ["test"] * 3,
+            "selection_reason": ["anchor", "morphology_priority", "morphology_priority"],
             "selection_rank": [0, 1, 2],
         }
     )
-    by_radius, by_survey, summary = summarize_matches(
+    by_radius, by_survey, by_selection_reason, summary = summarize_matches(
         source, annotated, [0.5, 1.0, 3.0], primary_radius_arcsec=1.0
     )
     half_arcsec = by_radius.set_index("radius_arcsec").loc[0.5]
@@ -254,3 +254,16 @@ def test_quality_duplicate_ranking_and_radius_summaries() -> None:
     assert summary["valid_candidate_rows_within_max_radius"] == 3
     assert summary["primary_radius_arcsec"] == 1.0
     assert set(by_survey["source_survey"]) == {"north", "south"}
+    primary_strata = by_selection_reason.loc[by_selection_reason["radius_arcsec"].eq(1.0)]
+    primary_strata = primary_strata.set_index("selection_reason")
+    assert primary_strata.loc["anchor", "matched_valid_objects"] == 1
+    assert primary_strata.loc["morphology_priority", "source_objects"] == 2
+    assert primary_strata.loc["morphology_priority", "matched_valid_objects"] == 1
+    assert primary_strata.loc["morphology_priority", "valid_match_fraction"] == 0.5
+    assert summary["primary_by_selection_reason"]["anchor"]["matched_valid_objects"] == 1
+    assert (
+        summary["primary_by_selection_reason"]["morphology_priority"][
+            "matched_valid_objects"
+        ]
+        == 1
+    )
