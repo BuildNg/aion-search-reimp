@@ -136,13 +136,15 @@ def add_reliable_morphology_labels(
 def morphology_coverage_tables(
     labelled_matches: pd.DataFrame,
     *,
-    total_pairs: int,
+    paired_redshifts: Sequence[float],
     fraction_threshold: float,
     redshift_bin_edges: Sequence[float],
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     """Summarize overall label support and support within redshift bins."""
-    if total_pairs < len(labelled_matches):
-        raise ValueError("total_pairs cannot be smaller than matched rows")
+    paired_z = np.asarray(paired_redshifts, dtype=float)
+    total_pairs = len(paired_z)
+    if total_pairs < len(labelled_matches) or not np.isfinite(paired_z).all():
+        raise ValueError("paired_redshifts must contain every finite paired-object redshift")
     edges = np.asarray(redshift_bin_edges, dtype=float)
     if len(edges) < 2 or not np.isfinite(edges).all() or np.any(np.diff(edges) <= 0):
         raise ValueError("redshift_bin_edges must be finite and strictly increasing")
@@ -151,6 +153,16 @@ def morphology_coverage_tables(
     missing = required - set(labelled_matches)
     if missing:
         raise ValueError(f"Labelled matches missing columns: {sorted(missing)}")
+    duplicated = labelled_matches["galaxy_zoo_dr8_id"].duplicated(keep=False)
+    if duplicated.any():
+        duplicate_ids = sorted(
+            labelled_matches.loc[duplicated, "galaxy_zoo_dr8_id"].astype(str).unique()
+        )
+        raise ValueError(
+            "Galaxy Zoo assignment is not one-to-one: "
+            f"{len(duplicate_ids)} catalog IDs match multiple paired objects; "
+            f"examples={duplicate_ids[:5]}"
+        )
 
     count_rows = []
     for label in MORPHOLOGY_LABELS:
@@ -165,39 +177,51 @@ def morphology_coverage_tables(
         )
     counts = pd.DataFrame(count_rows)
 
-    bins = pd.cut(
+    matched_bins = pd.cut(
         labelled_matches["z"].astype(float),
         bins=edges,
         right=False,
         include_lowest=True,
     )
+    paired_bins = pd.cut(
+        pd.Series(paired_z),
+        bins=edges,
+        right=False,
+        include_lowest=True,
+    )
     crosstab_rows = []
-    for interval in bins.cat.categories:
-        in_bin = bins.eq(interval)
+    for interval in paired_bins.cat.categories:
+        paired_in_bin = paired_bins.eq(interval)
+        matched_in_bin = matched_bins.eq(interval)
+        total_in_bin = int(paired_in_bin.sum())
+        matched_in_bin_count = int(matched_in_bin.sum())
         for label in MORPHOLOGY_LABELS:
             crosstab_rows.append(
                 {
                     "redshift_bin": str(interval),
                     "z_low": float(interval.left),
                     "z_high": float(interval.right),
-                    "matched_objects": int(in_bin.sum()),
+                    "total_paired_objects": total_in_bin,
+                    "matched_objects": matched_in_bin_count,
+                    "match_fraction": (
+                        matched_in_bin_count / total_in_bin if total_in_bin else 0.0
+                    ),
                     "morphology": label,
                     "positive_objects": int(
-                        labelled_matches.loc[in_bin, f"reliable_{label}"].sum()
+                        labelled_matches.loc[matched_in_bin, f"reliable_{label}"].sum()
                     ),
                 }
             )
     crosstab = pd.DataFrame(crosstab_rows)
-    outside_bins = int(bins.isna().sum())
-    duplicate_catalog_ids = int(labelled_matches["galaxy_zoo_dr8_id"].duplicated().sum())
     separations = labelled_matches["separation_arcsec"].to_numpy(dtype=float)
     summary = {
         "total_pairs": int(total_pairs),
         "matched_pairs": int(len(labelled_matches)),
         "coverage_fraction": float(len(labelled_matches) / total_pairs) if total_pairs else 0.0,
         "fraction_threshold": float(fraction_threshold),
-        "duplicate_galaxy_zoo_assignments": duplicate_catalog_ids,
-        "objects_outside_redshift_bins": outside_bins,
+        "duplicate_galaxy_zoo_assignments": 0,
+        "paired_objects_outside_redshift_bins": int(paired_bins.isna().sum()),
+        "matched_objects_outside_redshift_bins": int(matched_bins.isna().sum()),
         "separation_arcsec": (
             {
                 "median": float(np.median(separations)),

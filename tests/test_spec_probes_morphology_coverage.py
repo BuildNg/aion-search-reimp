@@ -66,7 +66,7 @@ def test_galaxy_zoo_match_and_path_gated_labels():
 
     counts, crosstab, summary = morphology_coverage_tables(
         labelled,
-        total_pairs=len(manifest),
+        paired_redshifts=manifest["z"],
         fraction_threshold=0.8,
         redshift_bin_edges=[0.0, 0.1, 0.2, 0.3, 1.0],
     )
@@ -76,6 +76,14 @@ def test_galaxy_zoo_match_and_path_gated_labels():
     assert positive["edge_on_disk"] == 1
     assert summary["matched_pairs"] == 3
     assert summary["coverage_fraction"] == 0.75
+    first_bin = crosstab.loc[crosstab["redshift_bin"].eq("[0.0, 0.1)")].iloc[0]
+    assert first_bin["total_paired_objects"] == 1
+    assert first_bin["matched_objects"] == 1
+    assert first_bin["match_fraction"] == 1.0
+    last_bin = crosstab.loc[crosstab["redshift_bin"].eq("[0.3, 1.0)")].iloc[0]
+    assert last_bin["total_paired_objects"] == 1
+    assert last_bin["matched_objects"] == 0
+    assert last_bin["match_fraction"] == 0.0
     assert crosstab.loc[
         crosstab["morphology"].eq("barred_spiral"), "positive_objects"
     ].sum() == 1
@@ -94,3 +102,25 @@ def test_reliable_labels_reject_missing_columns_and_weak_parent():
     labelled = add_reliable_morphology_labels(row, fraction_threshold=0.8)
     assert not bool(labelled.loc[0, "reliable_spiral"])
     assert not bool(labelled.loc[0, "reliable_barred_spiral"])
+
+
+def test_coverage_rejects_duplicate_galaxy_zoo_assignments():
+    matches = pd.DataFrame(
+        {
+            "object_id": ["a", "b"],
+            "galaxy_zoo_dr8_id": ["same", "same"],
+            "separation_arcsec": [0.1, 0.2],
+            "z": [0.1, 0.2],
+            **{
+                f"reliable_{label}": [False, False]
+                for label in ("smooth", "featured_or_disk", "spiral", "barred_spiral", "edge_on_disk")
+            },
+        }
+    )
+    with np.testing.assert_raises_regex(ValueError, "not one-to-one"):
+        morphology_coverage_tables(
+            matches,
+            paired_redshifts=[0.1, 0.2],
+            fraction_threshold=0.8,
+            redshift_bin_edges=[0.0, 1.0],
+        )

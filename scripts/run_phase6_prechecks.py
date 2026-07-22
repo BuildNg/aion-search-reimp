@@ -161,7 +161,7 @@ def run_galaxy_zoo_audit(config: Dict[str, Any]) -> None:
     )
     counts, crosstab, summary = morphology_coverage_tables(
         labelled,
-        total_pairs=len(manifest),
+        paired_redshifts=manifest["z"],
         fraction_threshold=float(spec["reliable_fraction_threshold"]),
         redshift_bin_edges=spec["redshift_bin_edges"],
     )
