@@ -268,20 +268,21 @@ each encoder/split -> test-embedding fingerprint + reuse provenance
 
 ## Spectrum crossmatch population scaling
 
-The other half of decision 12 is owned by `src/spectra_crossmatch/`, not by the encoder probe or retrieval packages. After the exact 10k feasibility readout, the active config expands its 3,602 HSC objects to an exact 18,000-row HSC coordinate population from the same pinned `astronolan/galaxy-descriptions` revision. Selection happens before captioning: it retains the authoritative HSC anchor, reapplies the locked benchmark exclusions, and chooses additions by a stable object-ID hash. The right side remains the pinned `UniverseTBD/mmu_desi_edr_sv3` HATS catalog, opened through LSDB with only `object_id`, RA/Dec, `Z`, `ZERR`, and `ZWARN`. Images, captions, embeddings, and spectrum arrays are never loaded.
+The other half of decision 12 is owned by `src/spectra_crossmatch/`, not by the encoder probe or retrieval packages. After the exact 10k feasibility readout, the first scale config expanded its 3,602 HSC objects to an exact 18,000-row HSC coordinate population from the same pinned `astronolan/galaxy-descriptions` revision. Selection happens before captioning: it retains the configured anchor, reapplies the locked benchmark exclusions, takes any ordered priority rows, and uses the stable object-ID hash only for the remaining capacity. The morphology follow-up anchors all 18,000 completed rows and adds every Galaxy Zoo candidate at the locked 0.7 confidence threshold: 3,394 candidates exist, 657 are already anchored, and the remaining 2,737 define an exact 20,737-row population with no random fill. The config asserts both counts. In the anchor, 34/657 priority objects have a valid 1-arcsec DESI match, so the measured morphology-conditional retention is 0.05175; `2,737 × (34/657) = 141.64` expected new paired morphology objects, and `(34 + 141.64) / 34 = 5.17×` expected morphology support. This can support a spiral/featured pilot, while barred-spiral and edge-on queries remain diagnostics unless their realized support is unexpectedly stronger. The enriched 20,737-row union is not representative of HSC, so aggregate pair counts and retrieval metrics cannot be population-level headlines; report the anchor and `morphology_priority` strata separately. The right side remains the pinned `UniverseTBD/mmu_desi_edr_sv3` HATS catalog, opened through LSDB with only `object_id`, RA/Dec, `Z`, `ZERR`, and `ZWARN`. Images, captions, embeddings, and spectrum arrays are never loaded.
 
 | Module | Owns | Must not own |
 |---|---|---|
 | `spectra_crossmatch/config.py` | strict `phase6_crossmatch` schema and cross-field policy | network access, matching, output writing |
-| `spectra_crossmatch/source.py` | canonical source schema, exact survey filtering, anchor-preserving deterministic selection | Hub access, exclusions I/O, LSDB calls |
+| `spectra_crossmatch/source.py` | canonical source schema, exact survey filtering, anchor-preserving ordered-priority selection and deterministic fill | Hub access, exclusions I/O, LSDB calls |
 | `spectra_crossmatch/crossmatch.py` | stable LSDB output normalization, spectrum-quality flags, duplicate ranking, radius/survey summaries | source sampling, LSDB/HF calls, model code |
-| `scripts/run_phase6_crossmatch_cluster.py` | pinned source loading, exclusion coverage, anchor validation, bound preflight, column-pruned LSDB execution, run artifacts | metric invention, model inference, caption generation |
+| `scripts/run_phase6_crossmatch_cluster.py` | pinned source/Galaxy Zoo loading, exclusion coverage, anchor validation, morphology-priority orchestration, bound preflight, column-pruned LSDB execution, run artifacts | metric invention, model inference, caption generation |
 
 ```text
 pinned galaxy-descriptions metadata + locked benchmark exclusions
-  + authoritative v3 HSC anchor (3,602 rows)
+  + configured HSC anchor (3,602 feasibility rows or completed 18,000 rows)
+  + optional checksum-pinned Galaxy Zoo 0.7-confidence priority list
   -> source.select_source_population
-  -> exact 18,000 HSC object IDs + RA/Dec + source row IDs (fingerprinted)
+  -> exact configured HSC object IDs + RA/Dec + source row IDs (fingerprinted)
   -> LSDB in-memory HATS left catalog
 
 pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
@@ -291,10 +292,10 @@ pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
   -> deterministic duplicate choice: separation, then DESI object_id
   -> selected_matches.parquet at the locked primary 1-arcsec radius
      + counts_by_radius.csv (0.5/1/2/3 arcsec)
-     + counts_by_survey.csv + summary.json
+     + counts_by_survey.csv + counts_by_selection_reason.csv + summary.json
 ```
 
-`--preflight` binds the source and DESI revisions, authoritative anchor, exclusion artifacts, exact 18k fingerprint, current config/code/package versions, HATS schema, right-margin presence, and one real quality-valid zero-distance DESI self-match. It writes no run directory. The full CPU-only job refuses to start from a failed or stale report. `summary.json` states whether the primary 1-arcsec selection reaches the configured target of 1,000 valid pairs.
+`--preflight` binds the source and DESI revisions, configured anchor, exclusion artifacts, selected-population fingerprint, optional Galaxy Zoo checksum and priority counts, current config/code/package versions, HATS schema, right-margin presence, and one real quality-valid zero-distance DESI self-match. It writes no run directory. The full CPU-only job refuses to start from a failed or stale report. `summary.json` states whether the primary 1-arcsec selection reaches the configured valid-pair target.
 
 ## Decisions that remain stable
 
@@ -310,6 +311,7 @@ pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
 10. Existing result directories are never silently mixed with retries.
 11. A new model arm requires a specific unresolved scientific question.
 12. Spectra code is not added to the retrieval/training pipeline until cross-match size and a spectra-sensitive evaluation pass review. That review has two halves, delivered separately: the frozen-encoder physical-recovery probes in `src/spec_probes/` (see "Spectrum encoder probes" below) are the encoder-quality half, and a captioned-objects x spectra cross-match feasibility check (the wiki plan's Optional Phase 6 week-gate item 3) is the other half. `src/spec_probes/` has no retrieval or training coupling.
+13. At the pinned source and Galaxy Zoo revisions with the locked 0.7 threshold, 3,394 objects are the complete reliable-morphology pool: 657 are in the 18k anchor and all 2,737 remaining objects enter the expansion. More morphology support requires changing the threshold, catalog, or source revision and therefore a new preregistered population. Because the resulting union is deliberately enriched, report anchor and morphology-priority strata separately; aggregate metrics do not estimate HSC-population performance.
 
 ## Change checklist
 

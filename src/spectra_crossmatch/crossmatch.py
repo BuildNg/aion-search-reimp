@@ -147,14 +147,15 @@ def summarize_matches(
     candidates: pd.DataFrame,
     radii_arcsec: Sequence[float],
     primary_radius_arcsec: float,
-) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
-    """Build overall/radius and survey/radius feasibility tables."""
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    """Build overall, survey, and selection-stratum feasibility tables."""
     source_ids = set(source["source_object_id"].astype(str))
     if not set(candidates["source_object_id"].astype(str)).issubset(source_ids):
         raise ValueError("Candidate matches contain object IDs outside the source manifest")
 
     overall_rows: List[Dict[str, Any]] = []
     survey_rows: List[Dict[str, Any]] = []
+    selection_rows: List[Dict[str, Any]] = []
     for radius in radii_arcsec:
         within = candidates.loc[candidates["separation_arcsec"] <= float(radius)]
         valid = within.loc[within["is_valid_spectrum"]]
@@ -191,6 +192,23 @@ def summarize_matches(
                 }
             )
 
+        for reason, reason_source in source.groupby("selection_reason", dropna=False):
+            reason_ids = set(reason_source["source_object_id"].astype(str))
+            reason_within = within.loc[within["source_object_id"].isin(reason_ids)]
+            reason_valid = valid.loc[valid["source_object_id"].isin(reason_ids)]
+            selection_rows.append(
+                {
+                    "radius_arcsec": float(radius),
+                    "selection_reason": str(reason),
+                    "source_objects": int(len(reason_source)),
+                    "matched_any_objects": int(reason_within["source_object_id"].nunique()),
+                    "matched_valid_objects": int(reason_valid["source_object_id"].nunique()),
+                    "valid_match_fraction": float(
+                        reason_valid["source_object_id"].nunique() / len(reason_source)
+                    ),
+                }
+            )
+
     exclusion_counts = (
         candidates.loc[~candidates["is_valid_spectrum"], "quality_exclusion_reason"]
         .value_counts(dropna=False)
@@ -201,12 +219,26 @@ def summarize_matches(
         raise ValueError("primary_radius_arcsec must be one of radii_arcsec")
     selected_primary = select_nearest_valid(candidates, float(primary_radius_arcsec))
     separations = selected_primary["separation_arcsec"].to_numpy(dtype=float)
+    primary_selection = [
+        row
+        for row in selection_rows
+        if row["radius_arcsec"] == float(primary_radius_arcsec)
+    ]
     summary = {
         "source_objects": int(len(source)),
         "candidate_rows_within_max_radius": int(len(candidates)),
         "valid_candidate_rows_within_max_radius": int(candidates["is_valid_spectrum"].sum()),
         "quality_exclusion_counts": {str(key): int(value) for key, value in exclusion_counts.items()},
         "primary_radius_arcsec": float(primary_radius_arcsec),
+        "primary_by_selection_reason": {
+            row["selection_reason"]: {
+                "source_objects": row["source_objects"],
+                "matched_any_objects": row["matched_any_objects"],
+                "matched_valid_objects": row["matched_valid_objects"],
+                "valid_match_fraction": row["valid_match_fraction"],
+            }
+            for row in primary_selection
+        },
         "selected_primary_separation_arcsec_quantiles": (
             {
                 "min": float(np.min(separations)),
@@ -219,4 +251,9 @@ def summarize_matches(
             else None
         ),
     }
-    return pd.DataFrame(overall_rows), pd.DataFrame(survey_rows), summary
+    return (
+        pd.DataFrame(overall_rows),
+        pd.DataFrame(survey_rows),
+        pd.DataFrame(selection_rows),
+        summary,
+    )

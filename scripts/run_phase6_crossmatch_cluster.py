@@ -1,8 +1,8 @@
-"""Cluster entrypoint for the deterministic HSC × DESI scale crossmatch.
+"""Cluster entrypoint for deterministic or morphology-prioritized HSC × DESI crossmatch.
 
-The left side is an exact 18k HSC population selected from the pinned AION-Search
-source metadata. It retains the 3,602 HSC objects from the authoritative Phase-6
-feasibility run and adds a stable hash sample after the same benchmark exclusions.
+The left side is an exact configured HSC population selected from pinned
+AION-Search source metadata. It retains its configured anchor, optionally takes
+Galaxy Zoo morphology priorities, then uses stable hash fill after exclusions.
 The right side is a pinned MMU DESI HATS catalog opened column-pruned through LSDB.
 No image, caption, embedding, spectrum array, or model weight is loaded.
 """
@@ -29,6 +29,12 @@ from aion_reimp.manifest import (
     coordinate_exclusion_coverage,
     exact_exclusion_coverage,
 )
+from aion_reimp.utils import file_digest
+from spec_probes.morphology_coverage import (
+    GALAXY_ZOO_COLUMNS,
+    add_reliable_morphology_labels,
+    match_galaxy_zoo,
+)
 from spectra_crossmatch.config import load_config
 from spectra_crossmatch.crossmatch import (
     annotate_candidates,
@@ -46,6 +52,7 @@ PREFLIGHT_CODE_PATHS = (
     "src/spectra_crossmatch/config.py",
     "src/spectra_crossmatch/source.py",
     "src/spectra_crossmatch/crossmatch.py",
+    "src/spec_probes/morphology_coverage.py",
 )
 PREFLIGHT_DISTRIBUTIONS = (
     "datasets",
@@ -113,7 +120,10 @@ def _load_anchor_ids(config: Mapping[str, Any]) -> set[str]:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     if status.get("status") != "complete" or summary.get("run_id") != anchor["run_id"]:
         raise ValueError("Anchor crossmatch run is not the configured completed run")
-    if summary.get("captioned_source_fingerprint") != anchor["source_fingerprint"]:
+    fingerprint_field = anchor.get(
+        "summary_fingerprint_field", "captioned_source_fingerprint"
+    )
+    if summary.get(fingerprint_field) != anchor["source_fingerprint"]:
         raise ValueError("Anchor source fingerprint differs from the configured authoritative value")
 
     manifest = pd.read_parquet(
@@ -136,6 +146,123 @@ def _load_anchor_ids(config: Mapping[str, Any]) -> set[str]:
             f"expected {anchor['expected_survey_rows']}"
         )
     return set(selected)
+
+
+def _load_morphology_priority_ids(
+    metadata: pd.DataFrame,
+    excluded_ids: set[str],
+    anchor_ids: set[str],
+    config: Mapping[str, Any],
+) -> Tuple[list[str], Dict[str, Any]]:
+    source = config["source_population"]
+    spec = source.get("morphology_priority")
+    if spec is None:
+        return [], {"enabled": False}
+
+    catalog_path = Path(spec["catalog_path"])
+    if not catalog_path.exists():
+        raise FileNotFoundError(
+            f"Galaxy Zoo catalog missing: {catalog_path}. Download the pinned file from "
+            f"{spec['source_url']}"
+        )
+    actual_md5 = file_digest(catalog_path, "md5")
+    if actual_md5 != spec["source_md5"]:
+        raise ValueError(
+            f"Galaxy Zoo catalog MD5 mismatch: expected {spec['source_md5']}, got {actual_md5}"
+        )
+    catalog = pd.read_parquet(catalog_path, columns=list(GALAXY_ZOO_COLUMNS))
+    if len(catalog) != int(spec["expected_catalog_rows"]):
+        raise ValueError(
+            f"Expected {spec['expected_catalog_rows']} Galaxy Zoo rows, found {len(catalog)}"
+        )
+
+    candidates = metadata.loc[
+        metadata["source_survey"].eq(str(source["survey_value"]))
+        & ~metadata["source_object_id"].isin(excluded_ids)
+    ].copy()
+    manifest = candidates.rename(
+        columns={
+            "source_object_id": "object_id",
+            "source_ra": "spectrum_ra",
+            "source_dec": "spectrum_dec",
+        }
+    )[["object_id", "spectrum_ra", "spectrum_dec"]]
+    manifest["z"] = 0.0
+    matched = match_galaxy_zoo(
+        manifest,
+        catalog,
+        radius_arcsec=float(spec["match_radius_arcsec"]),
+    )
+    matched = matched.drop(columns="z")
+    raw_match_rows = len(matched)
+    duplicated = matched["galaxy_zoo_dr8_id"].duplicated(keep=False)
+    duplicate_ids = int(matched.loc[duplicated, "galaxy_zoo_dr8_id"].nunique())
+    matched = (
+        matched.sort_values(["separation_arcsec", "object_id"], kind="mergesort")
+        .drop_duplicates("galaxy_zoo_dr8_id", keep="first")
+        .reset_index(drop=True)
+    )
+    labelled = add_reliable_morphology_labels(
+        matched,
+        fraction_threshold=float(spec["reliable_fraction_threshold"]),
+    )
+
+    labels = list(spec["labels"])
+    labelled["_priority_tier"] = len(labels)
+    reliable_counts: Dict[str, int] = {}
+    exclusive_counts: Dict[str, int] = {}
+    for tier, label in enumerate(labels):
+        flag = labelled[f"reliable_{label}"].astype(bool)
+        reliable_counts[label] = int(flag.sum())
+        choose = flag & labelled["_priority_tier"].eq(len(labels))
+        labelled.loc[choose, "_priority_tier"] = tier
+        exclusive_counts[label] = int(choose.sum())
+    priority = labelled.loc[labelled["_priority_tier"].lt(len(labels))].copy()
+    priority["_priority_key"] = priority["object_id"].map(
+        lambda object_id: _fingerprint(
+            {
+                "salt": source["selection_salt"],
+                "seed": source["selection_seed"],
+                "object_id": str(object_id),
+                "purpose": "morphology_priority",
+            }
+        )
+    )
+    priority = priority.sort_values(
+        ["_priority_tier", "_priority_key", "object_id"], kind="mergesort"
+    )
+    priority_ids = priority["object_id"].astype(str).tolist()
+    if not priority_ids:
+        raise ValueError("Morphology targeting found no eligible priority objects")
+    if len(priority_ids) != int(spec["expected_priority_objects"]):
+        raise ValueError(
+            f"Morphology targeting found {len(priority_ids)} priority objects; "
+            f"expected {spec['expected_priority_objects']}"
+        )
+    priority_additions = len(set(priority_ids) - anchor_ids)
+    if priority_additions != int(spec["expected_priority_additions"]):
+        raise ValueError(
+            f"Morphology targeting found {priority_additions} priority additions outside "
+            f"the anchor; expected {spec['expected_priority_additions']}"
+        )
+    return priority_ids, {
+        "enabled": True,
+        "catalog_path": str(catalog_path),
+        "source_url": spec["source_url"],
+        "source_md5": actual_md5,
+        "catalog_rows": int(len(catalog)),
+        "candidate_source_rows": int(len(candidates)),
+        "galaxy_zoo_matches_before_deduplication": int(raw_match_rows),
+        "duplicate_galaxy_zoo_ids": duplicate_ids,
+        "galaxy_zoo_matches": int(len(matched)),
+        "match_radius_arcsec": float(spec["match_radius_arcsec"]),
+        "reliable_fraction_threshold": float(spec["reliable_fraction_threshold"]),
+        "label_priority": labels,
+        "reliable_counts": reliable_counts,
+        "exclusive_priority_counts": exclusive_counts,
+        "priority_objects": int(len(priority_ids)),
+        "priority_additions_outside_anchor": int(priority_additions),
+    }
 
 
 def _build_exclusion_coverage(
@@ -202,6 +329,9 @@ def _load_source_population(
         coverage.loc[coverage["status"].eq("matched"), "source_object_id"].astype(str)
     )
     anchor_ids = _load_anchor_ids(config)
+    priority_ids, priority_provenance = _load_morphology_priority_ids(
+        metadata, excluded_ids, anchor_ids, config
+    )
     selected = select_source_population(
         metadata,
         survey=str(spec["survey_value"]),
@@ -210,6 +340,10 @@ def _load_source_population(
         salt=str(spec["selection_salt"]),
         excluded_object_ids=excluded_ids,
         anchor_object_ids=anchor_ids,
+        priority_object_ids=priority_ids,
+        anchor_selection_reason=str(
+            spec["anchor"].get("selection_reason", "anchor_phase6_crossmatch_v3")
+        ),
     )
     provenance = {
         "repo_id": spec["repo_id"],
@@ -226,6 +360,10 @@ def _load_source_population(
         "deterministic_expansion_rows": int(
             selected["selection_reason"].eq("deterministic_hsc_expansion").sum()
         ),
+        "morphology_priority_rows": int(
+            selected["selection_reason"].eq("morphology_priority").sum()
+        ),
+        "morphology_priority": priority_provenance,
         "selection_seed": int(spec["selection_seed"]),
         "selection_salt": str(spec["selection_salt"]),
         "fingerprint": source_fingerprint(selected),
@@ -413,7 +551,7 @@ def run_full(config: Mapping[str, Any]) -> Path:
     )
     write_json(run_dir / "preflight_contract.json", preflight)
 
-    with tracked_run(run_dir, {"phase": 6, "condition": "hsc_18k_x_desi_crossmatch"}):
+    with tracked_run(run_dir, {"phase": 6, "condition": "hsc_x_desi_crossmatch"}):
         source.to_parquet(run_dir / "source_manifest.parquet", index=False)
         coverage.to_parquet(run_dir / "exclusion_coverage.parquet", index=False)
         write_json(run_dir / "source_provenance.json", source_provenance)
@@ -450,7 +588,7 @@ def run_full(config: Mapping[str, Any]) -> Path:
         primary_radius = float(config["crossmatch"]["primary_radius_arcsec"])
         selected = select_nearest_valid(candidates, primary_radius)
         selected.to_parquet(run_dir / "selected_matches.parquet", index=False)
-        by_radius, by_survey, summary = summarize_matches(
+        by_radius, by_survey, by_selection_reason, summary = summarize_matches(
             source,
             candidates,
             config["crossmatch"]["radii_arcsec"],
@@ -458,6 +596,9 @@ def run_full(config: Mapping[str, Any]) -> Path:
         )
         by_radius.to_csv(run_dir / "counts_by_radius.csv", index=False)
         by_survey.to_csv(run_dir / "counts_by_survey.csv", index=False)
+        by_selection_reason.to_csv(
+            run_dir / "counts_by_selection_reason.csv", index=False
+        )
         target = int(config["crossmatch"]["target_valid_matches"])
         write_json(
             run_dir / "summary.json",

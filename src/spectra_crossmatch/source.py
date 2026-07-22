@@ -70,8 +70,10 @@ def select_source_population(
     salt: str,
     excluded_object_ids: Iterable[str],
     anchor_object_ids: Iterable[str],
+    priority_object_ids: Iterable[str] = (),
+    anchor_selection_reason: str = "anchor_phase6_crossmatch_v3",
 ) -> pd.DataFrame:
-    """Expand a required anchor set to an exact, deterministic survey sample."""
+    """Expand an anchor, taking ordered priority rows before hash-sampled fill."""
     missing = set(METADATA_COLUMNS) - set(metadata)
     if missing:
         raise ValueError(f"Normalized source metadata missing columns: {sorted(missing)}")
@@ -82,14 +84,23 @@ def select_source_population(
 
     excluded = {str(value) for value in excluded_object_ids}
     anchors = {str(value) for value in anchor_object_ids}
+    priority_order = list(dict.fromkeys(str(value) for value in priority_object_ids))
+    priorities = set(priority_order)
     if anchors & excluded:
         raise ValueError(f"{len(anchors & excluded)} anchor objects are benchmark exclusions")
+    if priorities & excluded:
+        raise ValueError(f"{len(priorities & excluded)} priority objects are benchmark exclusions")
 
     survey_rows = metadata.loc[metadata["source_survey"].eq(str(survey))].copy()
     survey_ids = set(survey_rows["source_object_id"])
     missing_anchors = anchors - survey_ids
     if missing_anchors:
         raise ValueError(f"{len(missing_anchors)} anchor objects are absent from survey {survey!r}")
+    missing_priorities = priorities - survey_ids
+    if missing_priorities:
+        raise ValueError(
+            f"{len(missing_priorities)} priority objects are absent from survey {survey!r}"
+        )
     if len(anchors) > sample_size:
         raise ValueError(f"Anchor has {len(anchors)} rows, exceeding sample_size={sample_size}")
 
@@ -100,19 +111,34 @@ def select_source_population(
         )
 
     additions_needed = sample_size - len(anchors)
-    additions = eligible.loc[~eligible["source_object_id"].isin(anchors)].copy()
+    priority_rank = {object_id: rank for rank, object_id in enumerate(priority_order)}
+    priority_rows = eligible.loc[
+        eligible["source_object_id"].isin(priorities - anchors)
+    ].copy()
+    priority_rows["_priority_rank"] = priority_rows["source_object_id"].map(priority_rank)
+    priority_rows = (
+        priority_rows.sort_values(["_priority_rank", "source_object_id"], kind="mergesort")
+        .head(additions_needed)
+        .drop(columns="_priority_rank")
+    )
+
+    fill_needed = additions_needed - len(priority_rows)
+    additions = eligible.loc[
+        ~eligible["source_object_id"].isin(anchors | set(priority_rows["source_object_id"]))
+    ].copy()
     additions["_selection_key"] = additions["source_object_id"].map(
         lambda value: _selection_key(str(value), seed, salt)
     )
     additions = additions.sort_values(["_selection_key", "source_object_id"], kind="mergesort")
-    additions = additions.head(additions_needed).drop(columns="_selection_key")
-    if len(additions) != additions_needed:
-        raise ValueError(f"Only {len(additions)} non-anchor additions for required {additions_needed}")
+    additions = additions.head(fill_needed).drop(columns="_selection_key")
+    if len(additions) != fill_needed:
+        raise ValueError(f"Only {len(additions)} fill rows for required {fill_needed}")
 
     anchor_rows = eligible.loc[eligible["source_object_id"].isin(anchors)].copy()
-    anchor_rows["selection_reason"] = "anchor_phase6_crossmatch_v3"
+    anchor_rows["selection_reason"] = str(anchor_selection_reason)
+    priority_rows["selection_reason"] = "morphology_priority"
     additions["selection_reason"] = "deterministic_hsc_expansion"
-    selected = pd.concat([anchor_rows, additions], ignore_index=True)
+    selected = pd.concat([anchor_rows, priority_rows, additions], ignore_index=True)
     selected["_selection_key"] = selected["source_object_id"].map(
         lambda value: _selection_key(str(value), seed, salt)
     )

@@ -65,6 +65,17 @@ the configured local path. It reads only coordinates and required vote
 fractions, then writes coverage and redshift-support tables. Neither command
 trains or evaluates a retrieval model.
 
+The morphology-targeted crossmatch preserves the completed 18k source
+population and adds all 2,737 new 0.7-confidence Galaxy Zoo candidates found
+by the pinned full-population audit. Exact candidate-count guards prevent
+silent random fill or truncation. Both existing cluster scripts accept the
+config through `CONFIG_PATH`, so the preflight and full run use the same entrypoint:
+
+```bash
+sbatch --export=ALL,CONFIG_PATH=configs/phase6_crossmatch_morphology.yaml cluster/script_phase6_crossmatch_preflight.sh
+sbatch --export=ALL,CONFIG_PATH=configs/phase6_crossmatch_morphology.yaml cluster/script_phase6_crossmatch.sh
+```
+
 ## Cluster location
 
 - project: `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/AION-Search`

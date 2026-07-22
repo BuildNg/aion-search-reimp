@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from spectra_crossmatch.config import CrossmatchConfigError, load_config, validate_config
 from spectra_crossmatch.crossmatch import (
@@ -29,6 +30,25 @@ def test_crossmatch_config_is_strict_and_pinned() -> None:
     broken["unused"] = True
     with pytest.raises(CrossmatchConfigError, match="Unknown top-level"):
         validate_config(broken)
+
+    targeted = load_config(ROOT / "configs" / "phase6_crossmatch_morphology.yaml")
+    assert targeted["source_population"]["sample_size"] == 20_737
+    assert targeted["source_population"]["anchor"]["expected_survey_rows"] == 18_000
+    assert (
+        targeted["source_population"]["morphology_priority"][
+            "reliable_fraction_threshold"
+        ]
+        == 0.7
+    )
+    prechecks = yaml.safe_load(
+        (ROOT / "configs" / "phase6_prechecks.yaml").read_text(encoding="utf-8")
+    )
+    assert (
+        targeted["source_population"]["morphology_priority"][
+            "reliable_fraction_threshold"
+        ]
+        == prechecks["galaxy_zoo"]["reliable_fraction_threshold"]
+    )
 
 
 def test_source_selection_is_exact_deterministic_and_keeps_anchor() -> None:
@@ -74,6 +94,57 @@ def test_source_selection_is_exact_deterministic_and_keeps_anchor() -> None:
     assert "d" not in set(selected["source_object_id"])
     assert set(selected["source_survey"]) == {"hsc"}
     assert source_fingerprint(selected) == source_fingerprint(repeated)
+
+
+def test_source_selection_takes_ordered_priorities_before_hash_fill() -> None:
+    raw = pd.DataFrame(
+        {
+            "id": ["a", "b", "c", "d", "e", "f"],
+            "survey": ["hsc"] * 6,
+            "ra": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            "dec": [0.0] * 6,
+            "row": list(range(6)),
+        }
+    )
+    metadata = normalize_source_metadata(
+        raw,
+        columns={
+            "object_id": "id",
+            "survey": "survey",
+            "ra": "ra",
+            "dec": "dec",
+            "source_row_id": "row",
+        },
+    )
+    selected = select_source_population(
+        metadata,
+        survey="hsc",
+        sample_size=4,
+        seed=17,
+        salt="targeted-v1",
+        excluded_object_ids=set(),
+        anchor_object_ids={"a"},
+        priority_object_ids=["d", "c"],
+        anchor_selection_reason="anchor_18k",
+    )
+    by_id = selected.set_index("source_object_id")
+    assert {"a", "c", "d"}.issubset(set(selected["source_object_id"]))
+    assert by_id.loc["a", "selection_reason"] == "anchor_18k"
+    assert by_id.loc["c", "selection_reason"] == "morphology_priority"
+    assert by_id.loc["d", "selection_reason"] == "morphology_priority"
+    assert selected["selection_reason"].eq("deterministic_hsc_expansion").sum() == 1
+
+    capped = select_source_population(
+        metadata,
+        survey="hsc",
+        sample_size=2,
+        seed=17,
+        salt="targeted-v1",
+        excluded_object_ids=set(),
+        anchor_object_ids={"a"},
+        priority_object_ids=["d", "c"],
+    )
+    assert set(capped["source_object_id"]) == {"a", "d"}
 
 
 def test_normalize_lsdb_matches_requires_explicit_suffix_contract() -> None:
@@ -133,7 +204,7 @@ def _candidate_frame() -> pd.DataFrame:
             "source_ra": [10.0, 10.0, 10.0, 20.0, 30.0],
             "source_dec": [0.0, 0.0, 0.0, 1.0, 2.0],
             "source_row_id": [1, 1, 1, 2, 3],
-            "selection_reason": ["test"] * 5,
+            "selection_reason": ["anchor"] * 3 + ["morphology_priority"] * 2,
             "selection_rank": [0, 0, 0, 1, 2],
             "desi_object_id": ["bad", "200", "100", "300", "400"],
             "desi_ra": [10.0, 10.0, 10.0, 20.0, 30.0],
@@ -167,11 +238,11 @@ def test_quality_duplicate_ranking_and_radius_summaries() -> None:
             "source_ra": [10.0, 20.0, 30.0],
             "source_dec": [0.0, 1.0, 2.0],
             "source_row_id": [1, 2, 3],
-            "selection_reason": ["test"] * 3,
+            "selection_reason": ["anchor", "morphology_priority", "morphology_priority"],
             "selection_rank": [0, 1, 2],
         }
     )
-    by_radius, by_survey, summary = summarize_matches(
+    by_radius, by_survey, by_selection_reason, summary = summarize_matches(
         source, annotated, [0.5, 1.0, 3.0], primary_radius_arcsec=1.0
     )
     half_arcsec = by_radius.set_index("radius_arcsec").loc[0.5]
@@ -183,3 +254,16 @@ def test_quality_duplicate_ranking_and_radius_summaries() -> None:
     assert summary["valid_candidate_rows_within_max_radius"] == 3
     assert summary["primary_radius_arcsec"] == 1.0
     assert set(by_survey["source_survey"]) == {"north", "south"}
+    primary_strata = by_selection_reason.loc[by_selection_reason["radius_arcsec"].eq(1.0)]
+    primary_strata = primary_strata.set_index("selection_reason")
+    assert primary_strata.loc["anchor", "matched_valid_objects"] == 1
+    assert primary_strata.loc["morphology_priority", "source_objects"] == 2
+    assert primary_strata.loc["morphology_priority", "matched_valid_objects"] == 1
+    assert primary_strata.loc["morphology_priority", "valid_match_fraction"] == 0.5
+    assert summary["primary_by_selection_reason"]["anchor"]["matched_valid_objects"] == 1
+    assert (
+        summary["primary_by_selection_reason"]["morphology_priority"][
+            "matched_valid_objects"
+        ]
+        == 1
+    )
