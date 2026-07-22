@@ -1,0 +1,72 @@
+schema_version: 1
+kind: phase6_crossmatch
+
+run:
+  id: phase6_hsc_crossmatch_morphology_25k_v1
+  output_root: results
+  preflight_report: preflight/phase6_hsc_crossmatch_morphology_25k_v1.json
+
+source_population:
+  repo_id: astronolan/galaxy-descriptions
+  revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
+  split: default
+  # Preserve the completed 18k population, then add up to 7k rows with rare
+  # morphology candidates first and deterministic HSC fill only if needed.
+  sample_size: 25000
+  survey_value: hsc_pdr3_wide
+  selection_seed: 20260722
+  selection_salt: phase6_hsc_crossmatch_morphology_25k_v1
+  object_id_column: object_id
+  survey_column: survey
+  ra_column: ra
+  dec_column: dec
+  anchor:
+    run_dir: results/phase6_hsc_crossmatch_18k_v1
+    run_id: phase6_hsc_crossmatch_18k_v1
+    manifest_path: source_manifest.parquet
+    expected_manifest_rows: 18000
+    expected_survey_rows: 18000
+    source_fingerprint: 22d5c7564c409c13372232b37ff659d5f17854ad872b3a662e919a1f472d1e4f
+    object_id_column: source_object_id
+    survey_column: source_survey
+    summary_fingerprint_field: source_population_fingerprint
+    selection_reason: anchor_phase6_hsc_crossmatch_18k_v1
+  morphology_priority:
+    catalog_path: data/galaxy_zoo_desi/gz_desi_deep_learning_catalog_friendly.parquet
+    source_url: https://zenodo.org/records/8360385/files/gz_desi_deep_learning_catalog_friendly.parquet?download=1
+    source_md5: 114785d00c4d4f2208185bee73dd08b8
+    expected_catalog_rows: 8689370
+    match_radius_arcsec: 1.0
+    reliable_fraction_threshold: 0.7
+    # Earlier entries win if the 7k expansion capacity is reached.
+    labels: [barred_spiral, edge_on_disk, spiral, featured_or_disk]
+
+exclusions:
+  radius_arcsec: 1.0
+  caption_screen_labels: data/caption_screen_64/caption_screen_labels.parquet
+  benchmark_coordinates:
+    gz_decals: results/phase0_reference_v2/benchmark_coordinates/gz_decals_coordinates.parquet
+    lens: results/phase0_reference_v2/benchmark_coordinates/lens_coordinates.parquet
+
+desi_catalog:
+  repo_id: UniverseTBD/mmu_desi_edr_sv3
+  revision: 9fd88ba48233cb9857701ce802a7eade2d4c4a88
+  object_id_column: object_id
+  ra_column: ra
+  dec_column: dec
+  redshift_column: Z
+  redshift_error_column: ZERR
+  zwarn_column: ZWARN
+
+crossmatch:
+  radii_arcsec: [0.5, 1.0, 2.0, 3.0]
+  primary_radius_arcsec: 1.0
+  target_valid_matches: 1800
+  max_neighbors: 8
+  require_right_margin: true
+  duplicate_policy: nearest_valid_then_desi_object_id
+
+quality:
+  zwarn_good_value: false
+  minimum_redshift: 0.0
+  require_positive_redshift_error: true

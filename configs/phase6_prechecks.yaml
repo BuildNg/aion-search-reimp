@@ -16,7 +16,7 @@ alpha_sensitivity:
   alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0]
 
 galaxy_zoo:
-  run_id: phase6_galaxy_zoo_coverage_v1
+  run_id: phase6_galaxy_zoo_coverage_v2
   # Public Galaxy Zoo DESI v1.0.1 friendly catalog. It contains model-
   # predicted volunteer vote fractions and coordinates, but no images are read.
   catalog_path: data/galaxy_zoo_desi/gz_desi_deep_learning_catalog_friendly.parquet
@@ -24,5 +24,7 @@ galaxy_zoo:
   source_md5: 114785d00c4d4f2208185bee73dd08b8
   expected_catalog_rows: 8689370
   match_radius_arcsec: 1.0
-  reliable_fraction_threshold: 0.8
+  # Locked after the 0.55-0.90 cached coverage audit. This preserves useful
+  # support without treating near-even morphology votes as reliable labels.
+  reliable_fraction_threshold: 0.7
   redshift_bin_edges: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 1.0, 10.0]

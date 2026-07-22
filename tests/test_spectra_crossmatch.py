@@ -30,6 +30,16 @@ def test_crossmatch_config_is_strict_and_pinned() -> None:
     with pytest.raises(CrossmatchConfigError, match="Unknown top-level"):
         validate_config(broken)
 
+    targeted = load_config(ROOT / "configs" / "phase6_crossmatch_morphology.yaml")
+    assert targeted["source_population"]["sample_size"] == 25_000
+    assert targeted["source_population"]["anchor"]["expected_survey_rows"] == 18_000
+    assert (
+        targeted["source_population"]["morphology_priority"][
+            "reliable_fraction_threshold"
+        ]
+        == 0.7
+    )
+
 
 def test_source_selection_is_exact_deterministic_and_keeps_anchor() -> None:
     raw = pd.DataFrame(
@@ -74,6 +84,57 @@ def test_source_selection_is_exact_deterministic_and_keeps_anchor() -> None:
     assert "d" not in set(selected["source_object_id"])
     assert set(selected["source_survey"]) == {"hsc"}
     assert source_fingerprint(selected) == source_fingerprint(repeated)
+
+
+def test_source_selection_takes_ordered_priorities_before_hash_fill() -> None:
+    raw = pd.DataFrame(
+        {
+            "id": ["a", "b", "c", "d", "e", "f"],
+            "survey": ["hsc"] * 6,
+            "ra": [10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
+            "dec": [0.0] * 6,
+            "row": list(range(6)),
+        }
+    )
+    metadata = normalize_source_metadata(
+        raw,
+        columns={
+            "object_id": "id",
+            "survey": "survey",
+            "ra": "ra",
+            "dec": "dec",
+            "source_row_id": "row",
+        },
+    )
+    selected = select_source_population(
+        metadata,
+        survey="hsc",
+        sample_size=4,
+        seed=17,
+        salt="targeted-v1",
+        excluded_object_ids=set(),
+        anchor_object_ids={"a"},
+        priority_object_ids=["d", "c"],
+        anchor_selection_reason="anchor_18k",
+    )
+    by_id = selected.set_index("source_object_id")
+    assert {"a", "c", "d"}.issubset(set(selected["source_object_id"]))
+    assert by_id.loc["a", "selection_reason"] == "anchor_18k"
+    assert by_id.loc["c", "selection_reason"] == "morphology_priority"
+    assert by_id.loc["d", "selection_reason"] == "morphology_priority"
+    assert selected["selection_reason"].eq("deterministic_hsc_expansion").sum() == 1
+
+    capped = select_source_population(
+        metadata,
+        survey="hsc",
+        sample_size=2,
+        seed=17,
+        salt="targeted-v1",
+        excluded_object_ids=set(),
+        anchor_object_ids={"a"},
+        priority_object_ids=["d", "c"],
+    )
+    assert set(capped["source_object_id"]) == {"a", "d"}
 
 
 def test_normalize_lsdb_matches_requires_explicit_suffix_contract() -> None:

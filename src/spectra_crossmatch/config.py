@@ -44,6 +44,12 @@ def _require_sha256(value: Any, field: str) -> None:
         raise CrossmatchConfigError(f"{field} must be a 64-character SHA-256, got {value!r}")
 
 
+def _require_md5(value: Any, field: str) -> None:
+    text = str(value)
+    if len(text) != 32 or any(ch not in "0123456789abcdef" for ch in text.lower()):
+        raise CrossmatchConfigError(f"{field} must be a 32-character MD5, got {value!r}")
+
+
 def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
     top = {
         "schema_version",
@@ -90,6 +96,7 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             "ra_column",
             "dec_column",
             "anchor",
+            "morphology_priority",
         },
         {
             "repo_id",
@@ -127,13 +134,19 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
         "source_fingerprint",
         "object_id_column",
         "survey_column",
+        "summary_fingerprint_field",
+        "selection_reason",
     }
+    anchor_required = anchor_allowed - {"summary_fingerprint_field", "selection_reason"}
     unknown_anchor = sorted(set(anchor) - anchor_allowed)
-    missing_anchor = sorted(anchor_allowed - set(anchor))
+    missing_anchor = sorted(anchor_required - set(anchor))
     if unknown_anchor:
         raise CrossmatchConfigError(f"Unknown source_population.anchor keys: {unknown_anchor}")
     if missing_anchor:
         raise CrossmatchConfigError(f"Missing source_population.anchor keys: {missing_anchor}")
+    for key in ("summary_fingerprint_field", "selection_reason"):
+        if key in anchor and not str(anchor[key]).strip():
+            raise CrossmatchConfigError(f"source_population.anchor.{key} must be non-empty")
     for key in ("expected_manifest_rows", "expected_survey_rows"):
         if not isinstance(anchor[key], int) or isinstance(anchor[key], bool) or anchor[key] <= 0:
             raise CrossmatchConfigError(f"source_population.anchor.{key} must be a positive integer")
@@ -142,6 +155,81 @@ def validate_config(data: Mapping[str, Any]) -> Dict[str, Any]:
             "source_population.anchor.expected_survey_rows cannot exceed sample_size"
         )
     _require_sha256(anchor["source_fingerprint"], "source_population.anchor.source_fingerprint")
+
+    morphology = source.get("morphology_priority")
+    if morphology is not None:
+        if not isinstance(morphology, dict):
+            raise CrossmatchConfigError("source_population.morphology_priority must be a mapping")
+        morphology_keys = {
+            "catalog_path",
+            "source_url",
+            "source_md5",
+            "expected_catalog_rows",
+            "match_radius_arcsec",
+            "reliable_fraction_threshold",
+            "labels",
+        }
+        unknown_morphology = sorted(set(morphology) - morphology_keys)
+        missing_morphology = sorted(morphology_keys - set(morphology))
+        if unknown_morphology:
+            raise CrossmatchConfigError(
+                f"Unknown source_population.morphology_priority keys: {unknown_morphology}"
+            )
+        if missing_morphology:
+            raise CrossmatchConfigError(
+                f"Missing source_population.morphology_priority keys: {missing_morphology}"
+            )
+        _require_md5(
+            morphology["source_md5"],
+            "source_population.morphology_priority.source_md5",
+        )
+        for key in ("catalog_path", "source_url"):
+            if not str(morphology[key]).strip():
+                raise CrossmatchConfigError(
+                    f"source_population.morphology_priority.{key} must be non-empty"
+                )
+        if (
+            not isinstance(morphology["expected_catalog_rows"], int)
+            or isinstance(morphology["expected_catalog_rows"], bool)
+            or morphology["expected_catalog_rows"] <= 0
+        ):
+            raise CrossmatchConfigError(
+                "source_population.morphology_priority.expected_catalog_rows must be positive"
+            )
+        radius = morphology["match_radius_arcsec"]
+        if isinstance(radius, bool) or not isinstance(radius, (int, float)) or radius <= 0:
+            raise CrossmatchConfigError(
+                "source_population.morphology_priority.match_radius_arcsec must be positive"
+            )
+        threshold = morphology["reliable_fraction_threshold"]
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or not 0.5 < threshold <= 1.0
+        ):
+            raise CrossmatchConfigError(
+                "source_population.morphology_priority.reliable_fraction_threshold "
+                "must be in (0.5, 1.0]"
+            )
+        allowed_labels = {
+            "smooth",
+            "featured_or_disk",
+            "spiral",
+            "barred_spiral",
+            "edge_on_disk",
+        }
+        labels = morphology["labels"]
+        if (
+            not isinstance(labels, list)
+            or not labels
+            or any(not isinstance(label, str) for label in labels)
+            or len(labels) != len(set(labels))
+            or any(label not in allowed_labels for label in labels)
+        ):
+            raise CrossmatchConfigError(
+                "source_population.morphology_priority.labels must be a non-empty "
+                "unique list of supported morphology labels"
+            )
 
     exclusions = _section(
         data,
