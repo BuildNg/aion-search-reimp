@@ -59,6 +59,8 @@ heads:
 
 retrieval:
   k: 10
+  primary_metric: ndcg_at_k
+  secondary_metrics: [recall_at_k, precision_at_k]
   morphology_threshold: 0.7
   # Only Galaxy Zoo-matched objects enter the benchmark. The other 228
   # spectrum pairs have unknown morphology and are not treated as negatives.

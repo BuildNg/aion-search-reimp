@@ -90,7 +90,8 @@ python scripts/run_phase6_multimodal_retrieval.py joint
 ```
 
 The locked headline conjunctions are featured/disk and spiral at
-`0.05 <= z < 0.15`. Outputs include row-level rankings, per-seed metrics,
+`0.05 <= z < 0.15`. nDCG@10 is primary. Recall@10 is secondary and each
+row reports its `min(10, positives) / positives` ceiling. Outputs include row-level rankings, per-seed metrics,
 anchor/enriched-stratum tables, fusion-minus-control differences, selected
 ridge alphas, and top-10 rows. This is structured supervised retrieval, not
 unrestricted natural-language spectrum understanding.

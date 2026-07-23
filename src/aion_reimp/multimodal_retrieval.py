@@ -58,6 +58,8 @@ def interval_score(values: Sequence[float], z_low: float, z_high: float) -> np.n
 def query_targets(
     manifest: pd.DataFrame,
     query: Mapping[str, Any],
+    *,
+    morphology_threshold: float,
 ) -> Dict[str, np.ndarray]:
     """Build locked continuous and binary targets for one structured query."""
     label = str(query["morphology"])
@@ -66,6 +68,13 @@ def query_targets(
         raise ValueError(f"Joint manifest missing {reliable_column}")
     strength = morphology_strength(manifest, label)
     reliable = manifest[reliable_column].astype(bool).to_numpy()
+    # The soft graded target and hard positive set must encode the same
+    # Galaxy Zoo branch: min(path votes) >= t iff every path vote >= t.
+    path_binary = strength >= float(morphology_threshold)
+    if not np.array_equal(reliable, path_binary):
+        raise ValueError(
+            f"Graded and binary {label!r} targets use different Galaxy Zoo paths"
+        )
     z = manifest["z"].to_numpy(dtype=float)
     in_redshift = (z >= float(query["z_low"])) & (z < float(query["z_high"]))
     return {
@@ -229,6 +238,9 @@ def _metrics_for_rows(rows: pd.DataFrame, query: Mapping[str, Any], k: int) -> D
             k,
         ),
         "recall_at_k": float(hits / positives) if positives else float("nan"),
+        "recall_at_k_ceiling": (
+            float(min(k, positives) / positives) if positives else float("nan")
+        ),
         "precision_at_k": float(hits / min(k, len(ranked))) if len(ranked) else float("nan"),
         "top_k_morphology_strength": float(top["morphology_strength"].mean()),
         "top_k_redshift_distance": float(np.mean(z_distance)),
@@ -267,7 +279,7 @@ def _readout(
             )
     metrics = pd.DataFrame(metric_rows)
     measure_columns = [
-        "ndcg_at_k", "recall_at_k", "precision_at_k",
+        "ndcg_at_k", "recall_at_k", "recall_at_k_ceiling", "precision_at_k",
         "top_k_morphology_strength", "top_k_redshift_distance",
     ]
     table_rows = []
@@ -315,6 +327,7 @@ def run_joint_retrieval(
     alpha_grid: Sequence[float],
     seed: int,
     k: int,
+    morphology_threshold: float,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Fit matched ridge heads and return row-level rankings and readouts."""
     required = {"object_id", "selection_reason", "z"}
@@ -329,7 +342,12 @@ def run_joint_retrieval(
         raise ValueError("Image and spectrum embeddings must align with the joint manifest")
     fusion = np.concatenate([image, spectrum], axis=1)
     arrays = {"image_only": image, "spectrum_only": spectrum, "image_plus_spectrum": fusion}
-    targets_by_query = {str(query["name"]): query_targets(manifest, query) for query in queries}
+    targets_by_query = {
+        str(query["name"]): query_targets(
+            manifest, query, morphology_threshold=morphology_threshold
+        )
+        for query in queries
+    }
     for query in queries:
         expected = int(query["expected_positive_objects"])
         observed = int(targets_by_query[str(query["name"])]["joint_binary"].sum())

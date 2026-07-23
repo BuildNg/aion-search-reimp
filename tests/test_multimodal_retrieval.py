@@ -47,8 +47,15 @@ def test_query_targets_use_path_minimum_and_locked_interval():
         "z_low": 0.05,
         "z_high": 0.20,
     }
-    targets = query_targets(frame, query)
+    targets = query_targets(frame, query, morphology_threshold=0.7)
     assert np.all(targets["joint_binary"] <= targets["morphology_binary"])
+    np.testing.assert_array_equal(
+        targets["morphology_binary"], morphology_strength(frame, "spiral") >= 0.7
+    )
+    mismatched = frame.copy()
+    mismatched.loc[1, "reliable_spiral"] = True
+    with pytest.raises(ValueError, match="different Galaxy Zoo paths"):
+        query_targets(mismatched, query, morphology_threshold=0.7)
     assert interval_score([0.10, 0.20, 0.25], 0.10, 0.20).tolist() == pytest.approx(
         [1.0, 1.0, np.exp(-1.0)]
     )
@@ -81,7 +88,9 @@ def test_joint_retrieval_uses_identical_test_objects_and_writes_controls():
         "z_low": 0.05,
         "z_high": 0.15,
     }
-    query["expected_positive_objects"] = int(query_targets(manifest, query)["joint_binary"].sum())
+    query["expected_positive_objects"] = int(
+        query_targets(manifest, query, morphology_threshold=0.7)["joint_binary"].sum()
+    )
     ranked, metrics, tables, comparisons, heads, splits = run_joint_retrieval(
         manifest,
         image,
@@ -93,6 +102,7 @@ def test_joint_retrieval_uses_identical_test_objects_and_writes_controls():
         alpha_grid=[0.1, 1.0],
         seed=7,
         k=10,
+        morphology_threshold=0.7,
     )
     assert set(ranked["condition"]) == set(MODEL_CONDITIONS + ABLATION_CONDITIONS + REFERENCE_CONDITIONS)
     assert set(ranked["task"]) == {"morphology", "redshift", "joint"}
@@ -105,6 +115,7 @@ def test_joint_retrieval_uses_identical_test_objects_and_writes_controls():
         & metrics["candidate_population"].eq("enriched_all")
     ]
     assert oracle.iloc[0]["ndcg_at_k"] == pytest.approx(1.0)
+    assert np.all(oracle["recall_at_k"] <= oracle["recall_at_k_ceiling"])
     assert set(metrics["candidate_population"]) == {"enriched_all", "anchor", "morphology_priority"}
     assert not tables.empty and not comparisons.empty and not heads.empty
     assert splits["object_id"].nunique() == len(manifest)

@@ -122,7 +122,11 @@ def _joint_manifest(config: Dict[str, Any]) -> pd.DataFrame:
     if len(manifest) != int(inputs["expected_labelled_pairs"]):
         raise ValueError("Galaxy Zoo labels are not an exact subset of the selected pairs")
     for query in config["retrieval"]["joint_queries"]:
-        query_targets(manifest, query)
+        query_targets(
+            manifest,
+            query,
+            morphology_threshold=float(config["retrieval"]["morphology_threshold"]),
+        )
     return manifest.sort_values("object_id").reset_index(drop=True)
 
 
@@ -223,7 +227,17 @@ def run_distance(config: Dict[str, Any]) -> None:
         metrics.to_csv(output / "metrics_by_seed.csv", index=False)
         tables.to_csv(output / "tables.csv", index=False)
         ranked.loc[ranked["rank"].le(10)].to_csv(output / "top10.csv", index=False)
-        write_json(output / "metrics.json", {"per_seed": _records(metrics), "aggregate": _records(tables)})
+        write_json(
+            output / "metrics.json",
+            {
+                "metric_contract": {
+                    "primary": config["retrieval"]["primary_metric"],
+                    "secondary": config["retrieval"]["secondary_metrics"],
+                },
+                "per_seed": _records(metrics),
+                "aggregate": _records(tables),
+            },
+        )
 
 
 def run_joint(config: Dict[str, Any]) -> None:
@@ -254,6 +268,7 @@ def run_joint(config: Dict[str, Any]) -> None:
             split_seeds=config["split"]["seeds"], train_ratio=float(config["split"]["train_ratio"]),
             cv_folds=int(config["heads"]["cv_folds"]), alpha_grid=config["heads"]["alpha_grid"],
             seed=int(config["run"]["seed"]), k=int(config["retrieval"]["k"]),
+            morphology_threshold=float(config["retrieval"]["morphology_threshold"]),
         )
         ranked.to_parquet(output / "ranked_rows.parquet", index=False)
         metrics.to_csv(output / "metrics_by_seed.csv", index=False)
@@ -270,7 +285,19 @@ def run_joint(config: Dict[str, Any]) -> None:
         )
         write_json(
             output / "metrics.json",
-            {"per_seed": _records(metrics), "aggregate": _records(tables), "comparisons": _records(comparisons)},
+            {
+                "metric_contract": {
+                    "primary": config["retrieval"]["primary_metric"],
+                    "secondary": config["retrieval"]["secondary_metrics"],
+                    "recall_interpretation": (
+                        "Recall@k is secondary and bounded by min(k, positives) / positives; "
+                        "use recall_at_k_ceiling to interpret its absolute value"
+                    ),
+                },
+                "per_seed": _records(metrics),
+                "aggregate": _records(tables),
+                "comparisons": _records(comparisons),
+            },
         )
         write_json(
             output / "embedding_fingerprints.json",
