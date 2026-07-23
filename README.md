@@ -76,6 +76,26 @@ sbatch --export=ALL,CONFIG_PATH=configs/phase6_crossmatch_morphology.yaml cluste
 sbatch --export=ALL,CONFIG_PATH=configs/phase6_crossmatch_morphology.yaml cluster/script_phase6_crossmatch.sh
 ```
 
+The bounded retrieval pilot uses only the 1,507 pairs with Galaxy Zoo labels;
+the 228 morphology-unknown pairs are not treated as negatives. The distance
+readout reuses cached held-out predictions. Preparation fetches spectra only
+for the 159 new labelled pairs, and the GPU run reuses all 1,348 labelled
+anchor embeddings before fitting matched ridge heads and shuffled-modality
+controls:
+
+```bash
+python scripts/run_phase6_multimodal_retrieval.py distance
+python scripts/run_phase6_multimodal_retrieval.py prepare
+python scripts/run_phase6_multimodal_retrieval.py joint
+```
+
+The locked headline conjunctions are featured/disk and spiral at
+`0.05 <= z < 0.15`. nDCG@10 is primary. Recall@10 is secondary and each
+row reports its `min(10, positives) / positives` ceiling. Outputs include row-level rankings, per-seed metrics,
+anchor/enriched-stratum tables, fusion-minus-control differences, selected
+ridge alphas, and top-10 rows. This is structured supervised retrieval, not
+unrestricted natural-language spectrum understanding.
+
 ## Cluster location
 
 - project: `/data2/cmdir/home/ioit_thql/trung_ng/astrobridge/AION-Search`

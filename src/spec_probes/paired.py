@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from aion_reimp.datasets import load_pinned_dataset
+from .encoders import SpectrumBatch
 from .probes import apply_scaler, fit_scaler, make_cv_folds, ridge_probe, select_ridge_alpha
 from .run_probes import (
     PREDICTIONS_COLUMNS,
@@ -22,6 +24,44 @@ PAIRED_MANIFEST_COLUMNS = (
     "object_id", "image_object_id", "spectrum_object_id", "source_row_id",
     "spectrum_ra", "spectrum_dec", "z", "zerr", "separation_arcsec",
 )
+
+
+def load_image_embeddings(
+    source: Mapping[str, Any],
+    manifest: pd.DataFrame,
+    *,
+    expected_dim: int = 768,
+) -> np.ndarray:
+    """Load pinned image embeddings in paired-manifest row order."""
+    dataset = load_pinned_dataset(source["repo_id"], source["revision"], source["split"])
+    dataset = dataset.select_columns([source["object_id_column"], source["embedding_column"]])
+    rows = dataset.select(manifest["source_row_id"].astype(int).tolist())
+    object_ids = [str(row[source["object_id_column"]]) for row in rows]
+    if object_ids != manifest["image_object_id"].astype(str).tolist():
+        raise ValueError("Image source rows do not align with the paired manifest")
+    values = np.stack(
+        [np.asarray(row[source["embedding_column"]], dtype=np.float32) for row in rows]
+    )
+    expected_shape = (len(manifest), int(expected_dim))
+    if values.shape != expected_shape:
+        raise ValueError(f"Expected {expected_shape} image embeddings, got {values.shape}")
+    return values
+
+
+def reorder_spectrum_batch(batch: SpectrumBatch, ordered_ids: Sequence[str]) -> SpectrumBatch:
+    """Return a spectrum batch in the exact requested object-ID order."""
+    row_by_id = {str(object_id): index for index, object_id in enumerate(batch.object_id)}
+    missing = [str(value) for value in ordered_ids if str(value) not in row_by_id]
+    if missing:
+        raise ValueError(f"Spectrum batch missing object_id={missing[0]!r}")
+    indices = np.asarray([row_by_id[str(value)] for value in ordered_ids], dtype=np.int64)
+    return SpectrumBatch(
+        object_id=np.asarray(batch.object_id)[indices],
+        flux=batch.flux[indices],
+        wave=batch.wave,
+        ivar=batch.ivar[indices] if batch.ivar is not None else None,
+        mask=batch.mask[indices] if batch.mask is not None else None,
+    )
 
 
 def build_paired_manifest(selected_matches: pd.DataFrame) -> pd.DataFrame:

@@ -48,6 +48,7 @@ Only current runnable configs and launch helpers remain live. A completed run pr
 | `losses.py` | pure symmetric InfoNCE computation | optimization, file IO |
 | `training.py` | seeding, optimizer/scheduler, epochs, validation loop and Recall@10 checkpoint policy via `metrics.py` | metric formulas, headline benchmark tuning |
 | `retrieval.py` | query projection, candidate ranking, top-k row outputs | metric definitions, model training |
+| `multimodal_retrieval.py` | Phase-6 structured morphology/redshift targets, matched ridge heads, shuffled-modality rankings, and retrieval readout | spectrum loading, encoder inference, catalog joins |
 | `metrics.py` | sole graded nDCG and Recall@k implementations, aggregation, uncertainty helpers | model execution, dataset discovery |
 | `evaluate.py` | frozen benchmark orchestration and result tables | checkpoint or prompt selection |
 | `artifacts.py` | run directory lifecycle, atomic metadata writes, completeness checks | scientific calculations |
@@ -297,6 +298,16 @@ pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
 
 `--preflight` binds the source and DESI revisions, configured anchor, exclusion artifacts, selected-population fingerprint, optional Galaxy Zoo checksum and priority counts, current config/code/package versions, HATS schema, right-margin presence, and one real quality-valid zero-distance DESI self-match. It writes no run directory. The full CPU-only job refuses to start from a failed or stale report. `summary.json` states whether the primary 1-arcsec selection reaches the configured valid-pair target.
 
+## Phase-6 multimodal retrieval
+
+The encoder, crossmatch, paired-redshift, regularization, and morphology-coverage gates have passed. Spectra may now enter one bounded retrieval experiment through `aion_reimp.multimodal_retrieval`; the general Phase 0–3 image/text training path remains unchanged.
+
+The benchmark starts from the 1,735 quality-valid HSC × DESI pairs but evaluates only the 1,507 objects with an actual Galaxy Zoo assignment. The other 228 objects have unknown morphology and are excluded rather than counted as negatives. The original 1,576-pair embedding cache supplies 1,348 labelled anchor objects; only the 159 new morphology-priority pairs require image-cache access and spectrum encoding.
+
+Each modality condition fits the same two train-only standardized ridge heads: continuous Galaxy Zoo path strength and spec-z. A structured conjunction score is predicted morphology strength multiplied by predicted redshift-interval membership. Image-only, spectrum-only, and concatenated image+spectrum use identical object splits, folds, alpha grids, and query contracts. Shuffled-image and shuffled-spectrum rows reuse the fitted fusion heads and perturb only the held-out modality. Oracle and deterministic no-information rankings bound the readout.
+
+The locked headline queries are featured/disk and spiral at `0.05 <= z < 0.15`, with 107 and 78 positives respectively in the full labelled benchmark. **nDCG@10 is primary.** Its graded Galaxy Zoo target is the minimum vote along the same decision-tree path used by the reliable 0.7 binary label; the run asserts that thresholding the graded target reproduces that binary label exactly. Recall@10 is secondary: with more than ten positives in every held-out split, its ceiling is `10 / positives`, so a small absolute value is not by itself a failed run. Artifacts report this ceiling explicitly. Row-level rankings retain selection reason. Tables report the enriched benchmark, anchor, and morphology-priority strata separately; only the enriched benchmark is the powered pilot, and none estimates HSC-population performance.
+
 ## Decisions that remain stable
 
 1. `orig_repo/` is reference-only; no new implementation is added inside it.
@@ -310,8 +321,9 @@ pinned MMU DESI EDR HATS catalog (metadata columns only, 10-arcsec margin)
 9. Row-level rankings are primary evaluation evidence.
 10. Existing result directories are never silently mixed with retries.
 11. A new model arm requires a specific unresolved scientific question.
-12. Spectra code is not added to the retrieval/training pipeline until cross-match size and a spectra-sensitive evaluation pass review. That review has two halves, delivered separately: the frozen-encoder physical-recovery probes in `src/spec_probes/` (see "Spectrum encoder probes" below) are the encoder-quality half, and a captioned-objects x spectra cross-match feasibility check (the wiki plan's Optional Phase 6 week-gate item 3) is the other half. `src/spec_probes/` has no retrieval or training coupling.
+12. Spectra code is not added to the retrieval/training pipeline until cross-match size and a spectra-sensitive evaluation pass review. Both halves have passed: frozen-encoder physical-recovery probes and the captioned-objects × spectra crossmatch. The resulting integration is limited to the bounded `multimodal_retrieval.py` experiment; `src/spec_probes/` itself keeps no retrieval or training coupling.
 13. At the pinned source and Galaxy Zoo revisions with the locked 0.7 threshold, 3,394 objects are the complete reliable-morphology pool: 657 are in the 18k anchor and all 2,737 remaining objects enter the expansion. More morphology support requires changing the threshold, catalog, or source revision and therefore a new preregistered population. Because the resulting union is deliberately enriched, report anchor and morphology-priority strata separately; aggregate metrics do not estimate HSC-population performance.
+14. The morphology × redshift benchmark contains only the 1,507 pairs with Galaxy Zoo assignments. Unmatched objects are unknown, not negatives. Headline queries are fixed to featured/disk and spiral at `0.05 <= z < 0.15`; barred and edge-on remain diagnostics outside this run.
 
 ## Change checklist
 

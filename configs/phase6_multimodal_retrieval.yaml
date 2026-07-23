@@ -1,0 +1,90 @@
+schema_version: 1
+kind: phase6_multimodal_retrieval
+
+run:
+  distance_id: phase6_distance_retrieval_v1
+  joint_id: phase6_multimodal_retrieval_v1
+  output_root: results
+  data_dir: data/phase6_multimodal_retrieval_v1
+  seed: 20260723
+  device: cuda
+
+inputs:
+  selected_matches: results/phase6_hsc_crossmatch_morphology_v1/selected_matches.parquet
+  expected_pairs: 1735
+  morphology_labels: results/phase6_hsc_crossmatch_morphology_v1/morphology_labels.parquet
+  expected_labelled_pairs: 1507
+  candidate_policy: galaxy_zoo_matched_only
+  base_run_dir: results/phase6_paired_redshift_v1
+  expected_base_pairs: 1576
+  expected_new_embeddings: 159
+
+image_source:
+  repo_id: astronolan/galaxy-descriptions
+  revision: 6890dc0c8fc793867c07a6ce4fce11e51c167d6e
+  split: default
+  object_id_column: object_id
+  embedding_column: aion_mean_embedding
+
+spectrum_source:
+  repo_id: UniverseTBD/mmu_desi_edr_sv3
+  revision: 9fd88ba48233cb9857701ce802a7eade2d4c4a88
+  catalog_path: mmu_desi_edr_sv3
+  object_id_column: object_id
+  spectrum_column: spectrum
+  flux_field: flux
+  wave_field: lambda
+  ivar_field: ivar
+  mask_field: mask
+  redshift_column: Z
+  zwarn_column: ZWARN
+
+spectrum_encoder:
+  name: aion_spectrumcodec
+  kind: aion_spectrumcodec
+  repo_id: polymathic-ai/aion-base
+  revision: 40541618104bab0fa85c8af68daeb867a720bb8c
+  output_dim: 768
+  batch_size: 64
+  dtype: float32
+  num_encoder_tokens: 600
+
+split:
+  train_ratio: 0.8
+  seeds: [20260717, 20260718, 20260719]
+
+heads:
+  cv_folds: 5
+  alpha_grid: [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0]
+
+retrieval:
+  k: 10
+  primary_metric: ndcg_at_k
+  secondary_metrics: [recall_at_k, precision_at_k]
+  morphology_threshold: 0.7
+  # Only Galaxy Zoo-matched objects enter the benchmark. The other 228
+  # spectrum pairs have unknown morphology and are not treated as negatives.
+  joint_queries:
+    - name: featured_disk_z005_015
+      text: Find galaxies with visible features or a disk between redshift 0.05 and 0.15.
+      morphology: featured_or_disk
+      z_low: 0.05
+      z_high: 0.15
+      expected_positive_objects: 107
+    - name: spiral_z005_015
+      text: Find spiral galaxies between redshift 0.05 and 0.15.
+      morphology: spiral
+      z_low: 0.05
+      z_high: 0.15
+      expected_positive_objects: 78
+  distance_queries:
+    - name: redshift_z005_015
+      text: Find galaxies between redshift 0.05 and 0.15.
+      morphology: featured_or_disk
+      z_low: 0.05
+      z_high: 0.15
+    - name: redshift_z010_020
+      text: Find galaxies between redshift 0.10 and 0.20.
+      morphology: featured_or_disk
+      z_low: 0.10
+      z_high: 0.20
