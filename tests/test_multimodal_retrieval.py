@@ -12,6 +12,7 @@ from aion_reimp.multimodal_retrieval import (
     query_targets,
     run_cached_distance_retrieval,
     run_joint_retrieval,
+    validate_cached_distance_predictions,
 )
 
 
@@ -154,3 +155,27 @@ def test_cached_distance_retrieval_ranks_every_condition_on_same_objects():
     assert {"oracle", "no_information", "image_only", "spectrum_only"} <= set(ranked["condition"])
     assert set(metrics["split_seed"]) == {1, 2}
     assert not tables.empty
+
+
+def test_cached_distance_validation_uses_held_out_rows_not_every_base_object():
+    base_ids = [f"object-{index}" for index in range(8)]
+    assignments = pd.DataFrame(
+        [
+            {"object_id": object_id, "split_seed": seed, "split": "test" if index in test else "train"}
+            for seed, test in ((1, {0, 1}), (2, {2, 3, 4}))
+            for index, object_id in enumerate(base_ids)
+        ]
+    )
+    predictions = pd.DataFrame(
+        [
+            {"object_id": object_id, "split_seed": seed, "encoder": encoder}
+            for seed, test in ((1, [0, 1]), (2, [2, 3, 4]))
+            for encoder in ("image_only", "spectrum_only")
+            for object_id in [base_ids[index] for index in test]
+        ]
+    )
+    validate_cached_distance_predictions(predictions, assignments, base_ids, [1, 2])
+    with pytest.raises(ValueError, match="held-out assignment"):
+        validate_cached_distance_predictions(
+            predictions.iloc[:-1], assignments, base_ids, [1, 2]
+        )

@@ -538,3 +538,40 @@ def run_cached_distance_retrieval(
     ranked = pd.concat(frames, ignore_index=True)
     metrics, tables, _ = _readout(ranked, queries, k=int(k))
     return ranked, metrics, tables
+
+
+def validate_cached_distance_predictions(
+    predictions: pd.DataFrame,
+    split_assignments: pd.DataFrame,
+    base_object_ids: Sequence[str],
+    split_seeds: Sequence[int],
+) -> None:
+    """Require exact held-out coverage per encoder, not full-population coverage."""
+    required_predictions = {"object_id", "encoder", "split_seed"}
+    required_splits = {"object_id", "split", "split_seed"}
+    if missing := required_predictions - set(predictions):
+        raise ValueError(f"Cached predictions missing columns: {sorted(missing)}")
+    if missing := required_splits - set(split_assignments):
+        raise ValueError(f"Split assignments missing columns: {sorted(missing)}")
+    base_ids = {str(value) for value in base_object_ids}
+    expected_encoders = set(predictions["encoder"].astype(str))
+    for split_seed in split_seeds:
+        assigned = split_assignments.loc[split_assignments["split_seed"].eq(split_seed)].copy()
+        if set(assigned["object_id"].astype(str)) != base_ids:
+            raise ValueError(f"Split {split_seed} does not cover the locked base population")
+        expected_test = set(
+            assigned.loc[assigned["split"].eq("test"), "object_id"].astype(str)
+        )
+        rows = predictions.loc[predictions["split_seed"].eq(split_seed)]
+        if rows.empty:
+            raise ValueError(f"Cached predictions are missing split {split_seed}")
+        if set(rows["encoder"].astype(str)) != expected_encoders:
+            raise ValueError(f"Cached prediction conditions differ for split {split_seed}")
+        for encoder, encoder_rows in rows.groupby("encoder"):
+            if encoder_rows["object_id"].astype(str).duplicated().any():
+                raise ValueError(f"Duplicate cached predictions for {encoder}, split {split_seed}")
+            if set(encoder_rows["object_id"].astype(str)) != expected_test:
+                raise ValueError(
+                    f"Cached predictions for {encoder}, split {split_seed} "
+                    "do not match the held-out assignment"
+                )

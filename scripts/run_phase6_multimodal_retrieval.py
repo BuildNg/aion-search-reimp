@@ -21,6 +21,7 @@ from aion_reimp.multimodal_retrieval import (
     query_targets,
     run_cached_distance_retrieval,
     run_joint_retrieval,
+    validate_cached_distance_predictions,
 )
 from spec_probes.encoders import build_encoder, resolve_device
 from spec_probes.morphology_coverage import add_reliable_morphology_labels
@@ -208,10 +209,14 @@ def prepare(config: Dict[str, Any]) -> None:
 
 
 def run_distance(config: Dict[str, Any]) -> None:
-    source = Path(config["inputs"]["base_run_dir"]) / "predictions.parquet"
+    base_dir = Path(config["inputs"]["base_run_dir"])
+    source = base_dir / "predictions.parquet"
     predictions = pd.read_parquet(source)
-    if predictions["object_id"].nunique() != int(config["inputs"]["expected_base_pairs"]):
-        raise ValueError("Cached distance predictions do not cover the locked base population")
+    split_assignments = pd.read_parquet(base_dir / "split_assignments.parquet")
+    base_ids, _, _ = _base_embeddings(config)
+    validate_cached_distance_predictions(
+        predictions, split_assignments, base_ids, config["split"]["seeds"]
+    )
     ranked, metrics, tables = run_cached_distance_retrieval(
         predictions,
         config["retrieval"]["distance_queries"],
