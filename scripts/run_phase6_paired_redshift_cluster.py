@@ -14,12 +14,13 @@ import pandas as pd
 import yaml
 
 from aion_reimp.artifacts import initialize_run, tracked_run, write_json
-from aion_reimp.datasets import load_pinned_dataset
 from aion_reimp.manifest import manifest_fingerprint
-from spec_probes.encoders import SpectrumBatch, build_encoder, resolve_device
+from spec_probes.encoders import build_encoder, resolve_device
 from spec_probes.paired import (
     build_paired_manifest,
+    load_image_embeddings,
     paired_redshift_readout,
+    reorder_spectrum_batch,
     run_paired_redshift_comparison,
 )
 from spec_probes.run_probes import (
@@ -51,34 +52,6 @@ def load_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
         if not isinstance(config.get(section), dict):
             raise ValueError(f"Missing config section: {section}")
     return config
-
-
-def _image_embeddings(config: Dict[str, Any], manifest: pd.DataFrame) -> np.ndarray:
-    source = config["image_source"]
-    dataset = load_pinned_dataset(source["repo_id"], source["revision"], source["split"])
-    dataset = dataset.select_columns([source["object_id_column"], source["embedding_column"]])
-    rows = dataset.select(manifest["source_row_id"].astype(int).tolist())
-    object_ids = [str(row[source["object_id_column"]]) for row in rows]
-    if object_ids != manifest["image_object_id"].tolist():
-        raise ValueError("Image source rows do not align with the paired manifest")
-    values = np.stack(
-        [np.asarray(row[source["embedding_column"]], dtype=np.float32) for row in rows]
-    )
-    if values.shape != (len(manifest), 768):
-        raise ValueError(f"Expected {(len(manifest), 768)} image embeddings, got {values.shape}")
-    return values
-
-
-def _reorder_batch(batch: SpectrumBatch, ordered_ids: list[str]) -> SpectrumBatch:
-    row_by_id = {str(object_id): index for index, object_id in enumerate(batch.object_id)}
-    indices = np.asarray([row_by_id[object_id] for object_id in ordered_ids], dtype=np.int64)
-    return SpectrumBatch(
-        object_id=np.asarray(batch.object_id)[indices],
-        flux=batch.flux[indices],
-        wave=batch.wave,
-        ivar=batch.ivar[indices] if batch.ivar is not None else None,
-        mask=batch.mask[indices] if batch.mask is not None else None,
-    )
 
 
 def _paired_manifest(config: Dict[str, Any]) -> pd.DataFrame:
@@ -275,7 +248,7 @@ def prepare(config: Dict[str, Any]) -> None:
     if image_path.exists():
         image_embeddings = np.load(image_path, allow_pickle=False)
     else:
-        image_embeddings = _image_embeddings(config, manifest)
+        image_embeddings = load_image_embeddings(config["image_source"], manifest)
         np.save(image_path, image_embeddings, allow_pickle=False)
     if image_embeddings.shape != (len(manifest), 768):
         raise ValueError("Cached image embeddings have the wrong shape")
@@ -299,7 +272,7 @@ def prepare(config: Dict[str, Any]) -> None:
         source["flux_field"], source["wave_field"],
         source["ivar_field"], source["mask_field"],
     )
-    batch = _reorder_batch(batch, manifest["spectrum_object_id"].tolist())
+    batch = reorder_spectrum_batch(batch, manifest["spectrum_object_id"].tolist())
     streamed_z = spectra.set_index(source["object_id_column"]).loc[
         manifest["spectrum_object_id"], source["redshift_column"]
     ].to_numpy(dtype=float)
